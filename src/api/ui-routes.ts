@@ -38,6 +38,10 @@ export function createUiApp(repo: Repo): Hono {
 
   app.get("/", (c) => c.html(renderDashboard(snapshot())));
 
+  // GET /ui/dashboard — the reactive #dashboard fragment on its own, so the SSE
+  // client (and htmx) can re-fetch it on any event without a full page reload.
+  app.get("/ui/dashboard", (c) => c.html(renderDashboardInner(snapshot())));
+
   // ── htmx action routes (MVP #2) ─────────────────────────────────────────────
   // These return the re-rendered #dashboard fragment so htmx can swap it in
   // place. They are thin adapters over the Repo — the same mutations the JSON
@@ -243,9 +247,26 @@ function renderDashboard(data: DashboardData): Html {
 <body>
   <header class="topbar"><h1>印刷キュー</h1></header>
   ${renderDashboardInner(data)}
+  <script>${raw(LIVE_SCRIPT)}</script>
 </body>
 </html>`;
 }
+
+// Live updates (spec 17 §3): subscribe to the SSE stream and, on any event,
+// re-fetch just the #dashboard fragment via htmx. Named events (see
+// sse-notifier formatFrame) need addEventListener, not onmessage. Inline for
+// now; moves to public/ alongside the CSS in a later slice.
+const LIVE_SCRIPT = `
+  (function () {
+    if (!window.EventSource) return;
+    var refresh = function () {
+      if (window.htmx) window.htmx.ajax('GET', '/ui/dashboard', { target: '#dashboard', swap: 'outerHTML' });
+    };
+    var es = new EventSource('/events');
+    ['job_started','job_finished','job_failed','waiting_for_refill','pending_action','filament_switched','timeout']
+      .forEach(function (t) { es.addEventListener(t, refresh); });
+  })();
+`;
 
 // Inline for this slice; moves to public/ when the SSE/htmx slice adds client JS.
 const STYLES = `

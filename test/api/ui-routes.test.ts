@@ -144,6 +144,24 @@ describe("GET / (dashboard SSR)", () => {
     });
   });
 
+  describe("live updates (MVP #3)", () => {
+    test("the page subscribes to the SSE stream", async () => {
+      const r = await body();
+      expect(r.text).toContain("new EventSource('/events')");
+      expect(r.text).toContain("/ui/dashboard");
+    });
+
+    test("GET /ui/dashboard returns just the reactive fragment", async () => {
+      repo.setStocker(8, 5);
+      const res = await app.request("/ui/dashboard");
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).toContain('id="dashboard"');
+      expect(text).not.toContain("<!doctype html>");
+      expect(text).toContain("5/8");
+    });
+  });
+
   describe("POST /ui/pending-actions/:id/resolve", () => {
     test("resolves the action and returns the refreshed #dashboard fragment", async () => {
       const job = repo.createJob({ filename: "j.3mf" });

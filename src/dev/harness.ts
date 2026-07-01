@@ -7,6 +7,8 @@ import { createApiApp } from "../api/routes.ts";
 import { createWriteApp } from "../api/write-routes.ts";
 import { createUploadApp } from "../api/upload-routes.ts";
 import { createUiApp } from "../api/ui-routes.ts";
+import { createEventsApp } from "../api/events-routes.ts";
+import { SseBroadcaster } from "../orchestrator/sse-notifier.ts";
 import { Dispatcher } from "../core/dispatcher.ts";
 import type { PrinterPort } from "../core/ports.ts";
 import { seedDevDb } from "./seed.ts";
@@ -32,7 +34,8 @@ const noopPrinter: PrinterPort = {
 const { repo } = openDb(":memory:");
 seedDevDb(repo);
 
-const dispatcher = new Dispatcher(repo, noopPrinter);
+const sse = new SseBroadcaster();
+const dispatcher = new Dispatcher(repo, noopPrinter, { notifier: sse });
 const cacheDir = mkdtempSync(join(tmpdir(), "a1-ui-dev-cache-"));
 
 const app = new Hono();
@@ -40,6 +43,7 @@ app.route("/", createApiApp(repo));
 app.route("/", createWriteApp({ repo, dispatcher }));
 app.route("/", createUploadApp({ repo, cacheDir }));
 app.route("/", createUiApp(repo));
+app.route("/", createEventsApp(sse));
 
 const server = Bun.serve({ port: HTTP_PORT, fetch: app.fetch });
 console.log(`UI dev harness up (in-memory, seeded, NO real printer)`);
