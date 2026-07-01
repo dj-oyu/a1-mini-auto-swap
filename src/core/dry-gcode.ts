@@ -3,6 +3,18 @@
 // layers (X/Y/Z) — to exercise the mechanism's vibration tolerance without
 // filament or heat. Pure string building; delivery (gcode_line/file) and
 // visualization are separate adapters.
+//
+// Optionally the plate-swap sequence is appended at the very end (§9): the test
+// trajectory itself carries NO swap gcode, but running the rehearsal ends with a
+// real plate swap — so the swap-gcode *insertion* is exercised too (same append
+// mechanism as the print pipeline's injectEndSequence). The swap block is marked
+// with ; DRY_SWAP_BEGIN/END and is exempt from the build-volume clamp (the swap
+// intentionally moves the head out of the normal area, e.g. G1 Z180).
+
+import { resolvePlaceholders } from "./gcode-inject.ts";
+
+export const DRY_SWAP_BEGIN = "; DRY_SWAP_BEGIN 1";
+export const DRY_SWAP_END = "; DRY_SWAP_END 1";
 
 export interface Axis {
   min: number;
@@ -19,6 +31,11 @@ export interface DryRehearsalOptions {
   feedrate: number; // mm/min
   danceAmplitudeMm: number;
   danceSegments?: number; // discretization of the figure-8, default 48
+  /** Server-side swap-sequence snippet (spec 7). When set, it is appended at the
+   *  very end so the rehearsal triggers a real plate swap (§9). */
+  swapSequence?: string;
+  /** Optional header vars to resolve `{name}` placeholders in the swap snippet. */
+  swapVars?: Record<string, string>;
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -97,6 +114,14 @@ export function buildDryRehearsalGcode(bounds: Bounds3D, opts: DryRehearsalOptio
   (["X", "Y", "Z"] as const).forEach((axis, i) => {
     lines.push(buildAxisLayer(axis, i + 1, bounds, opts));
   });
+  // §9: append the swap sequence at the very end (after the motion test), so a
+  // real plate swap happens. The trajectory layers above contain no swap gcode.
+  if (opts.swapSequence) {
+    const snippet = opts.swapVars
+      ? resolvePlaceholders(opts.swapSequence, opts.swapVars).text
+      : opts.swapSequence;
+    lines.push(DRY_SWAP_BEGIN, snippet.trim(), DRY_SWAP_END);
+  }
   lines.push("M84 ; disable motors");
   return lines.join("\n") + "\n";
 }

@@ -83,6 +83,54 @@ describe("figure-8 clamping (dry-rehearsal §5)", () => {
   });
 });
 
+describe("swap sequence appended at the end (dry-rehearsal §9, INV-DRY-07)", () => {
+  const SWAP = "G1 Z250 F3000\nG1 X0 Y0\nM400"; // Z250 intentionally outside bounds
+  const withSwap = buildDryRehearsalGcode(BOUNDS, { ...OPTS, swapSequence: SWAP });
+  const wl = withSwap.split("\n");
+
+  test("swap block appears exactly once, after the last layer and before M84", () => {
+    expect(withSwap.match(/; DRY_SWAP_BEGIN/g)).toHaveLength(1);
+    const lastLayer = wl.map((l) => l).lastIndexOf(";LAYER_CHANGE");
+    const swapBegin = wl.findIndex((l) => l.startsWith("; DRY_SWAP_BEGIN"));
+    const m84 = wl.findIndex((l) => l.startsWith("M84"));
+    expect(swapBegin).toBeGreaterThan(lastLayer);
+    expect(swapBegin).toBeLessThan(m84);
+  });
+
+  test("the trajectory (before the swap block) carries no swap gcode and stays in bounds (INV-DRY-04)", () => {
+    const trajectory = withSwap.slice(0, withSwap.indexOf("; DRY_SWAP_BEGIN"));
+    expect(trajectory).not.toContain("Z250"); // swap-only move is not in the trajectory
+    for (const c of coords(trajectory)) {
+      const b = c.axis === "X" ? BOUNDS.x : c.axis === "Y" ? BOUNDS.y : BOUNDS.z;
+      expect(c.value).toBeGreaterThanOrEqual(b.min);
+      expect(c.value).toBeLessThanOrEqual(b.max);
+    }
+  });
+
+  test("the swap block is emitted verbatim (exempt from the bounds clamp)", () => {
+    expect(withSwap).toContain("G1 Z250 F3000"); // NOT clamped to 180
+  });
+
+  test("still safe: no heater / no extrusion across the whole program (INV-DRY-01/02)", () => {
+    expect(withSwap).not.toMatch(/\bM10[49]\b|\bM1[49]0\b/);
+    expect(coords(withSwap).some((c) => c.axis === "E")).toBe(false);
+  });
+
+  test("resolves {name} placeholders in the swap snippet", () => {
+    const g = buildDryRehearsalGcode(BOUNDS, {
+      ...OPTS,
+      swapSequence: "; swap for {name}\nM400",
+      swapVars: { name: "plate_1" },
+    });
+    expect(g).toContain("; swap for plate_1");
+    expect(g).not.toContain("{name}");
+  });
+
+  test("without swapSequence, no swap markers are emitted (backward compatible)", () => {
+    expect(buildDryRehearsalGcode(BOUNDS, OPTS)).not.toContain("DRY_SWAP_BEGIN");
+  });
+});
+
 describe("axisSweep", () => {
   test("reciprocates between clamped hi/lo and repeats to fill the duration", () => {
     const g = axisSweep("X", 2000, 40, 6000, { min: 0, max: 180 });
