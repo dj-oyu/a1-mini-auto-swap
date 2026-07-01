@@ -144,6 +144,69 @@ describe("GET / (dashboard SSR)", () => {
     });
   });
 
+  describe("filament-confirm modal (MVP #5)", () => {
+    test("processing cards offer a フィラメント確認 button loading the modal", async () => {
+      repo.createJob({ filename: "new.3mf" }); // stays 'processing'
+      const r = await body();
+      expect(r.text).toContain("フィラメント確認");
+      expect(r.text).toContain('hx-get="/ui/queue/1/confirm"');
+      expect(r.text).toContain('hx-target="#modal"');
+    });
+
+    test("non-processing cards do not offer the confirm button", async () => {
+      const id = repo.createJob({ filename: "done.3mf" });
+      repo.updateStatus(id, "queued");
+      const r = await body();
+      // only the queued job exists → no confirm button anywhere
+      expect(r.text).not.toContain("/confirm");
+    });
+
+    test("GET .../confirm renders a swatch + AMS dropdown per filament slot", async () => {
+      const id = repo.createJob({
+        filename: "two.3mf",
+        filaments: [
+          { slot: 1, color: "#1f77b4" },
+          { slot: 2, color: "#ff7f0e" },
+        ],
+        ams_mapping: [2, -1, -1, -1],
+      });
+      const res = await app.request(`/ui/queue/${id}/confirm`);
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).toContain('data-confirm="' + id + '"');
+      expect(text).toContain("#1f77b4");
+      expect(text).toContain("#ff7f0e");
+      expect(text).toContain('data-slot="1"');
+      expect(text).toContain('data-slot="2"');
+      expect(text).toContain("未使用");
+      expect(text).toContain("AMS 4");
+      // slot 1's stored mapping (tray index 2 → "AMS 3") is pre-selected
+      expect(text).toMatch(/<option value="2" selected>AMS 3<\/option>/);
+    });
+
+    test("confirming a non-processing job is refused in the panel", async () => {
+      const id = repo.createJob({ filename: "x.3mf" });
+      repo.updateStatus(id, "printing");
+      const res = await app.request(`/ui/queue/${id}/confirm`);
+      const text = await res.text();
+      expect(text).toContain("確認待ちではありません");
+      expect(text).not.toContain("data-confirm=");
+    });
+
+    test("a missing job yields a friendly panel, not a crash", async () => {
+      const res = await app.request("/ui/queue/999999/confirm");
+      expect(res.status).toBe(200);
+      expect(await res.text()).toContain("見つかりません");
+    });
+
+    test("the page has a #modal mount and the confirm-submit client logic", async () => {
+      const r = await body();
+      expect(r.text).toContain('id="modal"');
+      expect(r.text).toContain("/filaments");
+      expect(r.text).toContain("ams_mapping");
+    });
+  });
+
   describe("printing header (MVP #4)", () => {
     test("renders no header when nothing is printing", async () => {
       repo.createJob({ filename: "waiting.3mf" }); // stays 'processing'
