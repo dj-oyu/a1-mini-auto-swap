@@ -45,6 +45,12 @@ export class Repo implements QueueStore {
   listProjects(): ProjectRow[] {
     return this.db.query("SELECT * FROM projects ORDER BY id").all() as ProjectRow[];
   }
+  // spec ch8: write endpoint for PATCH /api/projects/:id (color consistency policy toggle).
+  setProjectPolicy(id: number, policy: ColorConsistencyPolicy): void {
+    this.db
+      .query("UPDATE projects SET color_consistency_policy=?, updated_at=datetime('now') WHERE id=?")
+      .run(policy, id);
+  }
 
   // ── jobs ──────────────────────────────────────────────────────────────────
   createJob(input: CreateJobInput): number {
@@ -89,6 +95,10 @@ export class Repo implements QueueStore {
     this.db
       .query("UPDATE jobs SET substituted_slot=?, substituted_color=?, updated_at=datetime('now') WHERE id=?")
       .run(slot, color, id);
+  }
+  // spec ch8: write endpoint for DELETE /api/queue/:id (remove a non-active job).
+  deleteJob(id: number): void {
+    this.db.query("DELETE FROM jobs WHERE id=?").run(id);
   }
 
   // ── stocker ───────────────────────────────────────────────────────────────
