@@ -16,6 +16,12 @@ certs/
 data/
 .tmp/
 
+# Playwright E2E artifacts (browsers live in the user cache, not the repo)
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
 # env-specific config (public repo — keep real addresses/codes/keys out of git)
 .env
 .env.local
