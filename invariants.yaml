@@ -348,3 +348,40 @@ invariants:
     desc: "blocking_queue が未解決の間、新規ディスパッチは発生しない"
     check: "while any unresolved pending_action has severity == 'blocking_queue', no job transitions to 'printing'"
     layer: machine
+
+  # ── ドライリハーサルG-code：dry-rehearsal-gcode-spec.md ──────────────
+  - id: INV-DRY-01
+    spec: "dry-rehearsal §5"
+    desc: "ドライリハーサルG-codeは加熱コマンドを含まない（M104/M109/M140/M190）"
+    check: "generated dry-rehearsal gcode contains no M104|M109|M140|M190 line"
+    layer: machine
+
+  - id: INV-DRY-02
+    spec: "dry-rehearsal §5"
+    desc: "押し出し（E軸）移動を一切含まない"
+    check: "no gcode line contains an E axis word"
+    layer: machine
+
+  - id: INV-DRY-03
+    spec: "dry-rehearsal §5"
+    desc: "絶対移動の前にホーミング（G28）が実行される"
+    check: "G28 appears before the first G1"
+    layer: machine
+
+  - id: INV-DRY-04
+    spec: "dry-rehearsal §5"
+    desc: "全ての移動先座標が安全可動域（bounds）内にクランプされている"
+    check: "every X/Y/Z coordinate in a G1 line is within the provided bounds"
+    layer: machine
+
+  - id: INV-DRY-05
+    spec: "dry-rehearsal §3"
+    desc: "X/Y/Z の3レイヤー構成で、各レイヤーに LAYER_CHANGE マーカーがある"
+    check: "exactly 3 ';LAYER_CHANGE' markers, one per axis layer"
+    layer: machine
+
+  - id: INV-DRY-06
+    spec: "dry-rehearsal §3/§5"
+    desc: "末尾でモーターオフ（M84）して安全停止する"
+    check: "the program ends with an M84 line"
+    layer: machine
