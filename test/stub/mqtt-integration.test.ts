@@ -3,7 +3,7 @@ import mqtt, { type MqttClient } from "mqtt";
 import { join } from "node:path";
 import { VirtualPrinter } from "../../src/stub/virtual-printer.ts";
 import { StubMqttServer } from "../../src/stub/mqtt-server.ts";
-import { reportTopic, requestTopic } from "../../src/stub/topics.ts";
+import { reportTopic, requestTopic } from "../../src/protocol/topics.ts";
 import type { StatusReport, Tray } from "../../src/stub/types.ts";
 
 const SERIAL = "STUB0001";
