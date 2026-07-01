@@ -144,6 +144,23 @@ describe("GET / (dashboard SSR)", () => {
     });
   });
 
+  describe("thumbnails (MVP #6)", () => {
+    test("queue cards reference the job's thumbnail endpoint and hide it if absent", async () => {
+      const id = repo.createJob({ filename: "p.3mf" });
+      const r = await body();
+      expect(r.text).toContain(`src="/api/queue/${id}/thumbnail"`);
+      expect(r.text).toContain('onerror="this.remove()"'); // graceful when no thumb
+    });
+
+    test("the confirm modal shows the thumbnail above the filament rows", async () => {
+      const id = repo.createJob({ filename: "p.3mf", filaments: [{ slot: 1, color: "#111" }] });
+      const res = await app.request(`/ui/queue/${id}/confirm`);
+      const text = await res.text();
+      expect(text).toContain('class="confirm-thumb"');
+      expect(text).toContain(`src="/api/queue/${id}/thumbnail"`);
+    });
+  });
+
   describe("upload control (MVP #5)", () => {
     test("the header offers a 3MF file picker / drop zone", async () => {
       const r = await body();
