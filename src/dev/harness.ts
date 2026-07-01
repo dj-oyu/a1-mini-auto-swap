@@ -34,8 +34,22 @@ const noopPrinter: PrinterPort = {
   async resumeWithAlternateSlot() {},
 };
 
-const { repo } = openDb(":memory:");
-seedDevDb(repo);
+const { db, repo } = openDb(":memory:");
+// SEED=0 boots an empty DB (used by the empty-state E2E); default seeds the demo.
+if (process.env.SEED !== "0") seedDevDb(repo);
+
+/** Wipe all rows + reset AUTOINCREMENT counters, then optionally re-seed. Used
+ *  by the E2E suite (POST /__dev/reset[?seed=0]) to get deterministic, isolated
+ *  state per test. Dev harness only — never mounted by src/main.ts. */
+function resetDb(seed: boolean): void {
+  db.run("PRAGMA foreign_keys = OFF");
+  for (const t of ["pending_actions", "jobs", "projects", "stocker_state", "system_settings"]) {
+    db.run(`DELETE FROM ${t}`);
+  }
+  db.run("DELETE FROM sqlite_sequence"); // restart AUTOINCREMENT ids at 1
+  db.run("PRAGMA foreign_keys = ON");
+  if (seed) seedDevDb(repo);
+}
 
 const sse = new SseBroadcaster();
 const dispatcher = new Dispatcher(repo, noopPrinter, { notifier: sse });
@@ -55,7 +69,14 @@ app.route("/", createPrinterApp({ repo, status: fakeStatus }));
 app.route("/", createUiApp(repo));
 app.route("/", createEventsApp(sse));
 
-const server = Bun.serve({ port: HTTP_PORT, fetch: app.fetch });
+// Dev-only test hook: reset in-memory state between E2E tests.
+app.post("/__dev/reset", (c) => {
+  resetDb(c.req.query("seed") !== "0");
+  return c.json({ ok: true });
+});
+
+// idleTimeout 0: keep long-lived SSE (/events) connections open (dev harness).
+const server = Bun.serve({ port: HTTP_PORT, idleTimeout: 0, fetch: app.fetch });
 console.log(`UI dev harness up (in-memory, seeded, NO real printer)`);
 console.log(`  HTTP API  http://localhost:${server.port}`);
 console.log(`  cache     ${cacheDir}`);
