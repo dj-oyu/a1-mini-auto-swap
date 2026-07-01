@@ -199,9 +199,25 @@ function jobCard(job: JobRow): Html {
             ? html`<button class="act primary card-confirm" hx-get="/ui/queue/${job.id}/confirm" hx-target="#modal" hx-swap="innerHTML">フィラメント確認</button>`
             : ""}
         </div>
+        ${cardActions(job)}
       </div>
     </li>
   `;
+}
+
+/** Per-card management actions (spec 17): retry a failed job, delete any
+ *  non-printing job. Both are client fetch + #dashboard refresh (see
+ *  LIVE_SCRIPT). Delete is a two-step ("本当に削除？") — no native dialog. */
+function cardActions(job: JobRow): Html {
+  const buttons: Html[] = [];
+  if (job.status === "failed") {
+    buttons.push(html`<button class="act" data-retry="${job.id}">リトライ</button>`);
+  }
+  if (job.status !== "printing") {
+    buttons.push(html`<button class="act danger" data-delete="${job.id}">削除</button>`);
+  }
+  if (buttons.length === 0) return html``;
+  return html`<div class="card-actions">${buttons}</div>`;
 }
 
 /** Read-only 3D preview modal for any job (spec 17 §9). */
@@ -490,6 +506,38 @@ const LIVE_SCRIPT = `
     // the per-slot AMS selects into a 4-element mapping and PATCHes the job.
     document.body.addEventListener('click', function (e) {
       if (e.target.hasAttribute && e.target.hasAttribute('data-close')) { closeModal(); return; }
+
+      // card action: retry a failed job
+      var retryBtn = e.target.closest && e.target.closest('[data-retry]');
+      if (retryBtn) {
+        var rid = retryBtn.getAttribute('data-retry');
+        retryBtn.disabled = true;
+        fetch('/api/queue/' + rid + '/retry', { method: 'POST' })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function () { refresh(); })
+          .catch(function () { retryBtn.disabled = false; });
+        return;
+      }
+
+      // card action: delete a non-printing job (two-step, no native dialog)
+      var delBtn = e.target.closest && e.target.closest('[data-delete]');
+      if (delBtn) {
+        if (delBtn.getAttribute('data-armed') !== '1') {
+          delBtn.setAttribute('data-armed', '1');
+          delBtn.textContent = '本当に削除？';
+          return;
+        }
+        var did = delBtn.getAttribute('data-delete');
+        delBtn.disabled = true;
+        fetch('/api/queue/' + did, { method: 'DELETE' })
+          .then(function (r) {
+            if (r.status === 204) { refresh(); }
+            else { delBtn.disabled = false; delBtn.textContent = '削除できません'; }
+          })
+          .catch(function () { delBtn.disabled = false; });
+        return;
+      }
+
       var btn = e.target.closest && e.target.closest('[data-confirm]');
       if (!btn) return;
       var id = btn.getAttribute('data-confirm');
@@ -602,6 +650,9 @@ const STYLES = `
   .pending .plink + .act{margin-left:0}
   .act{font:inherit;font-size:13px;padding:5px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);cursor:pointer}
   .act:hover{background:#f3f4f6}
+  .card-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}
+  .act.danger{border-color:var(--red);color:var(--red)}
+  .act.danger:hover{background:#fdeaea}
   .act.primary{background:var(--blue);border-color:var(--blue);color:#fff}
   .act.primary:hover{background:#1d4ed8}
   .act:disabled{opacity:.5;cursor:default}
