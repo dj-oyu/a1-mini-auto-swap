@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { serveStatic } from "hono/bun";
 import { html, raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
 import type { Repo } from "../db/repo.ts";
@@ -9,13 +10,15 @@ import type { JobRow, JobStatus, PendingActionRow, Severity, StockerRow } from "
 type Html = HtmlEscapedString | Promise<HtmlEscapedString>;
 
 /**
- * Server-rendered Web UI (spec 17 / docs/ui-handoff.md). MVP slice #1: the
- * dashboard — queue list + status + stocker remaining + the 対応待ち banner.
+ * Server-rendered Web UI (spec 17 / docs/ui-handoff.md).
+ *   MVP #1: the dashboard — queue list + status + stocker + 対応待ち banner.
+ *   MVP #2: htmx resolve/refill actions on the banner (this slice).
  *
  * Presentation only: it reads the same Repo the JSON API does and renders HTML.
  * No domain logic here (that lives in core/). Built with Hono's `html` template
  * (auto-escapes interpolated values — filenames/messages come from uploads, so
- * escaping is a security boundary). No React, no build step (spec 17).
+ * escaping is a security boundary). No React, no build step (spec 17); htmx is
+ * vendored under public/ (self-hosted, no CDN).
  *
  * Returned as a Hono app so it mounts alongside the JSON API and is testable via
  * `app.request("/")` with no server/port.
@@ -23,11 +26,40 @@ type Html = HtmlEscapedString | Promise<HtmlEscapedString>;
 export function createUiApp(repo: Repo): Hono {
   const app = new Hono();
 
-  app.get("/", (c) => {
-    const jobs = repo.listJobs();
-    const stocker = repo.getStocker();
-    const pending = repo.getUnresolvedPendingActions();
-    return c.html(renderDashboard({ jobs, stocker, pending }));
+  const snapshot = () => ({
+    jobs: repo.listJobs(),
+    stocker: repo.getStocker(),
+    pending: repo.getUnresolvedPendingActions(),
+  });
+
+  // Static assets (vendored htmx, later CSS/JS). Root is resolved from the
+  // process CWD (repo root) — Bun-only, same runtime as main.ts/the harness.
+  app.use("/vendor/*", serveStatic({ root: "./public" }));
+
+  app.get("/", (c) => c.html(renderDashboard(snapshot())));
+
+  // ── htmx action routes (MVP #2) ─────────────────────────────────────────────
+  // These return the re-rendered #dashboard fragment so htmx can swap it in
+  // place. They are thin adapters over the Repo — the same mutations the JSON
+  // write routes expose (spec ch8); kept here so the swap payload is HTML.
+
+  // POST /ui/pending-actions/:id/resolve — human clears an item from 対応待ち.
+  app.post("/ui/pending-actions/:id/resolve", (c) => {
+    const id = Number(c.req.param("id"));
+    if (Number.isInteger(id) && id > 0) repo.resolvePendingAction(id);
+    return c.html(renderDashboardInner(snapshot()));
+  });
+
+  // POST /ui/stocker/refill — human reports the stocker refilled; also clears
+  // any outstanding stocker_refill pending (mirrors createWriteApp, INV-STOCKER-04).
+  app.post("/ui/stocker/refill", (c) => {
+    if (repo.getStocker()) {
+      repo.refillStocker();
+      for (const a of repo.getUnresolvedPendingActions()) {
+        if (a.type === "stocker_refill") repo.resolvePendingAction(a.id);
+      }
+    }
+    return c.html(renderDashboardInner(snapshot()));
   });
 
   return app;
@@ -136,6 +168,16 @@ function jobCard(job: JobRow): Html {
   `;
 }
 
+/** The action button on a 対応待ち row. stocker_refill resolves by refilling
+ *  (clearing the empty state); everything else is a plain "解決". Both post to a
+ *  /ui/* fragment route and let htmx swap the whole #dashboard in place. */
+function resolveButton(a: PendingActionRow): Html {
+  if (a.type === "stocker_refill") {
+    return html`<button class="act" hx-post="/ui/stocker/refill" hx-target="#dashboard" hx-swap="outerHTML">補充完了</button>`;
+  }
+  return html`<button class="act" hx-post="/ui/pending-actions/${a.id}/resolve" hx-target="#dashboard" hx-swap="outerHTML">解決</button>`;
+}
+
 function pendingBanner(pending: PendingActionRow[]): Html {
   const count = pending.length;
   const hasBlockingQueue = pending.some((a) => a.severity === "blocking_queue");
@@ -149,6 +191,7 @@ function pendingBanner(pending: PendingActionRow[]): Html {
         <span class="ptype">${PENDING_LABEL[a.type]}</span>
         ${a.message ? html`<span class="pmsg">${a.message}</span>` : ""}
         ${a.job_id != null ? html`<span class="plink">#${a.job_id}</span>` : ""}
+        ${resolveButton(a)}
       </li>
     `,
   );
@@ -166,33 +209,40 @@ function stockerChip(stocker: StockerRow | null): Html {
   return html`<span class="chip ${low}">プレート ${stocker.remaining}/${stocker.capacity}</span>`;
 }
 
-function renderDashboard(data: {
+interface DashboardData {
   jobs: JobRow[];
   stocker: StockerRow | null;
   pending: PendingActionRow[];
-}): Html {
+}
+
+/** The reactive part of the page: everything that changes when a 対応待ち item
+ *  is resolved. Wrapped in #dashboard so htmx can swap it as one unit. */
+function renderDashboardInner(data: DashboardData): Html {
   const { jobs, stocker, pending } = data;
   const cards =
     jobs.length === 0
       ? html`<li class="empty">キューは空です</li>`
       : html`${jobs.map(jobCard)}`;
+  return html`<div id="dashboard">
+    <div class="statusline">${stockerChip(stocker)}</div>
+    ${pendingBanner(pending)}
+    <main><ul class="queue">${cards}</ul></main>
+  </div>`;
+}
+
+function renderDashboard(data: DashboardData): Html {
   return html`<!doctype html>
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Auto-swap 印刷キュー</title>
+  <script src="/vendor/htmx.min.js" defer></script>
   <style>${raw(STYLES)}</style>
 </head>
 <body>
-  <header class="topbar">
-    <h1>印刷キュー</h1>
-    <div class="topbar-right">${stockerChip(stocker)}</div>
-  </header>
-  ${pendingBanner(pending)}
-  <main>
-    <ul class="queue">${cards}</ul>
-  </main>
+  <header class="topbar"><h1>印刷キュー</h1></header>
+  ${renderDashboardInner(data)}
 </body>
 </html>`;
 }
@@ -205,6 +255,7 @@ const STYLES = `
   body{margin:0;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
   .topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;background:var(--card);border-bottom:1px solid var(--line)}
   .topbar h1{font-size:17px;margin:0}
+  .statusline{display:flex;justify-content:flex-end;padding:12px 18px 0}
   .chip{font-size:13px;padding:4px 10px;border-radius:999px;background:#eef2f7;color:var(--ink)}
   .chip.ok{background:#e8f5ee;color:var(--green)} .chip.amber{background:#fdf0e2;color:var(--amber)} .chip.red{background:#fdeaea;color:var(--red)} .chip.warn{background:#fdf0e2;color:var(--amber)}
   .banner{margin:14px 18px;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:var(--card)}
@@ -219,6 +270,12 @@ const STYLES = `
   .pending.red .ptype{color:var(--red)} .pending.amber .ptype{color:var(--amber)} .pending.grey .ptype{color:var(--muted)}
   .pending .pmsg{color:var(--muted);font-size:14px}
   .pending .plink{margin-left:auto;color:var(--muted);font-variant-numeric:tabular-nums}
+  .pending .act{margin-left:auto}
+  .pending .plink + .act{margin-left:0}
+  .act{font:inherit;font-size:13px;padding:5px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);cursor:pointer}
+  .act:hover{background:#f3f4f6}
+  .pending.red .act{border-color:var(--red);color:var(--red)}
+  .pending .act[hx-post*="stocker"]{border-color:var(--amber);color:var(--amber)}
   main{padding:0 18px 24px}
   .queue{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
   .empty{color:var(--muted);padding:24px;text-align:center}
