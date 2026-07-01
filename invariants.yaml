@@ -370,8 +370,8 @@ invariants:
 
   - id: INV-DRY-04
     spec: "dry-rehearsal §5"
-    desc: "全ての移動先座標が安全可動域（bounds）内にクランプされている"
-    check: "every X/Y/Z coordinate in a G1 line is within the provided bounds"
+    desc: "軌道部分（swapブロックを除く）の全移動先座標が安全可動域内にクランプされている"
+    check: "every X/Y/Z coordinate in a G1 line BEFORE the DRY_SWAP block is within the provided bounds"
     layer: machine
 
   - id: INV-DRY-05
@@ -384,4 +384,10 @@ invariants:
     spec: "dry-rehearsal §3/§5"
     desc: "末尾でモーターオフ（M84）して安全停止する"
     check: "the program ends with an M84 line"
+    layer: machine
+
+  - id: INV-DRY-07
+    spec: "dry-rehearsal §9"
+    desc: "swapSequence 指定時、swapは軌道の後・M84の前に1回だけ挿入され、軌道自体はswapを含まない"
+    check: "when swapSequence given: exactly one DRY_SWAP block, after the last ;LAYER_CHANGE and before M84; the pre-swap trajectory contains no swap snippet"
     layer: machine
