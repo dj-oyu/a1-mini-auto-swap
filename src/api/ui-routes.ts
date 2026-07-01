@@ -365,7 +365,7 @@ function printingHeader(jobs: JobRow[]): Html {
   const est = job.estimated_seconds ?? 0;
   const startAttr = Number.isFinite(startMs) ? String(startMs) : "";
   return html`
-    <section class="printing" data-printing data-start="${startAttr}" data-est="${est}">
+    <section class="printing" data-printing data-job-id="${job.id}" data-start="${startAttr}" data-est="${est}">
       <div class="printing-head">
         <span class="badge blue">印刷中</span>
         <span class="filename">${job.filename}</span>
@@ -435,8 +435,10 @@ function renderDashboard(data: DashboardData): Html {
 // now; moves to public/ alongside the CSS in a later slice.
 const LIVE_SCRIPT = `
   (function () {
-    // MVP #4: tick the printing header's % and finish-time locally between
-    // events (progress is estimate-based until MQTT live remaining lands).
+    // Printing header: show a MEASURED ETA from the printer's live
+    // mc_remaining_time (polled from /api/printer/status), falling back to the
+    // static estimate (data-start/data-est) when no live value is available.
+    var liveStatus = null;
     function fmtClock(epoch) {
       try { return new Date(epoch).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
       catch (e) { return '--:--'; }
@@ -445,21 +447,38 @@ const LIVE_SCRIPT = `
       var els = document.querySelectorAll('[data-printing]');
       for (var i = 0; i < els.length; i++) {
         var el = els[i];
+        var jobId = Number(el.getAttribute('data-job-id'));
         var start = Number(el.getAttribute('data-start'));
         var est = Number(el.getAttribute('data-est'));
         var bar = el.querySelector('.prog-bar');
         var pctEl = el.querySelector('.pct');
         var etaEl = el.querySelector('[data-eta]');
-        if (!start || !est) { if (pctEl) pctEl.textContent = '進行中'; continue; }
-        var pct = Math.max(0, Math.min(100, (Date.now() - start) / 1000 / est * 100));
+        var pct, etaEpoch, live = false;
+        if (liveStatus && liveStatus.printing && liveStatus.job_id === jobId && liveStatus.remaining_min > 0) {
+          pct = Math.max(0, Math.min(100, liveStatus.percent));
+          etaEpoch = Date.now() + liveStatus.remaining_min * 60000;
+          live = true;
+        } else if (start && est) {
+          pct = Math.max(0, Math.min(100, (Date.now() - start) / 1000 / est * 100));
+          etaEpoch = start + est * 1000;
+        } else {
+          if (pctEl) pctEl.textContent = '進行中';
+          continue;
+        }
         if (bar) bar.style.width = pct.toFixed(1) + '%';
-        if (pctEl) pctEl.textContent = Math.floor(pct) + '%';
-        if (etaEl) etaEl.textContent = 'ETA ' + fmtClock(start + est * 1000);
+        if (pctEl) pctEl.textContent = Math.floor(pct) + '%' + (live ? '（実測）' : '（予定）');
+        if (etaEl) etaEl.textContent = 'ETA ' + fmtClock(etaEpoch);
       }
     }
+    function pollStatus() {
+      fetch('/api/printer/status')
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (s) { liveStatus = s; updatePrinting(); })
+        .catch(function () { updatePrinting(); });
+    }
 
-    updatePrinting();
-    setInterval(updatePrinting, 30000);
+    pollStatus();
+    setInterval(pollStatus, 10000);
     document.body.addEventListener('htmx:afterSwap', updatePrinting);
 
     function refresh() {

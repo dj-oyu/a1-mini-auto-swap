@@ -8,6 +8,7 @@ import { createWriteApp } from "../api/write-routes.ts";
 import { createUploadApp } from "../api/upload-routes.ts";
 import { createThumbnailApp } from "../api/thumbnail-routes.ts";
 import { createModelApp } from "../api/model-routes.ts";
+import { createPrinterApp, type PrinterStatusSource } from "../api/printer-routes.ts";
 import { createUiApp } from "../api/ui-routes.ts";
 import { createEventsApp } from "../api/events-routes.ts";
 import { SseBroadcaster } from "../orchestrator/sse-notifier.ts";
@@ -46,6 +47,11 @@ app.route("/", createWriteApp({ repo, dispatcher }));
 app.route("/", createUploadApp({ repo, cacheDir }));
 app.route("/", createThumbnailApp({ repo, cacheDir }));
 app.route("/", createModelApp({ repo, cacheDir }));
+// Fake live status so the dev printing header shows a measured ETA without a printer.
+const fakeStatus: PrinterStatusSource = {
+  latest: () => ({ gcodeState: "RUNNING", mcPercent: 42, mcRemainingTime: 73 }),
+};
+app.route("/", createPrinterApp({ repo, status: fakeStatus }));
 app.route("/", createUiApp(repo));
 app.route("/", createEventsApp(sse));
 
