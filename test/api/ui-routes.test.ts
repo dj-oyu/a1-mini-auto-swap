@@ -340,6 +340,17 @@ describe("GET / (dashboard SSR)", () => {
       expect(r.text).toContain("updatePrinting");
       expect(r.text).toContain("toLocaleTimeString");
     });
+
+    test("the header carries the job id and the client polls the live status", async () => {
+      const id = repo.createJob({ filename: "live.3mf", estimated_seconds: 1200 });
+      repo.updateStatus(id, "printing");
+      const r = await body();
+      expect(r.text).toContain(`data-job-id="${id}"`);
+      // client prefers measured ETA from /api/printer/status (remaining_min)
+      expect(r.text).toContain("/api/printer/status");
+      expect(r.text).toContain("remaining_min");
+      expect(r.text).toContain("実測");
+    });
   });
 
   describe("live updates (MVP #3)", () => {

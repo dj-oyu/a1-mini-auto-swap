@@ -85,13 +85,14 @@ bun run typecheck
 | PATCH | `/api/queue/:id/filaments` | `{ ams_mapping:number[4](-1..3), filaments? }` → 200 `JobRow`（processing→queued、`filament_confirm` pending も解決）／ 400 / 404 / **409（processing 以外は確定不可）** |
 | GET | `/api/queue/:id/thumbnail` | キャッシュ 3mf 内蔵のプレートPNG（`image/png`）／ 404 |
 | GET | `/api/queue/:id/model` | 3mf から抽出したメッシュ `{ positions:number[], indices:number[] }`（Three.jsビューア用）／ 404 |
+| GET | `/api/printer/status` | 実測ライブ状態 `{ printing, job_id, percent, remaining_min, gcode_state }`（MQTT `mc_remaining_time`/`mc_percent`） |
 | GET | `/events` | **SSE**。全 `NotifyEvent` をブラウザへ push（実装済み） |
 
 ### 未実装（spec 8章にあるが未着手＝UI担当が必要に応じて追加）
 - `GET /api/queue/:id/filaments`。
 - `POST /api/queue/:id/abort`（印刷中止→排出）。
 - `PATCH /api/queue/reorder`（並び替え）。
-- `GET /api/printer/status`（進捗/温度/ETA）/ `GET /api/printer/snapshot`（カメラ最新フレーム）。
+- `GET /api/printer/snapshot`（カメラ最新フレーム）。
 
 > SSE の作り方：バックエンドは変化を `Notifier` port（`src/core/ports.ts`）に emit している
 > （`job_finished`/`job_failed`/`waiting_for_refill`/`pending_action`/`filament_switched`/`timeout`）。
