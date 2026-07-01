@@ -68,8 +68,14 @@ docs 更新 ／ **秘密・環境固有情報なし**。
 
 ## フェーズ状況
 
-- **完了**: Phase 0（足場）、Phase 1（printer-stub: MQTT/TLS + `__control` + 決定論 state machine）、
-  Phase 2（implicit FTPS 990）、**シナリオランナー（AI-verify ③）のエンジン**
-  （`src/verify/`: DSL パーサ + `Sut` アダプタ抽象 + `runScenario`。フェイクで単体検証済み）。
-- **次**: Phase 3（コアループ: キュー state machine / ディスパッチ / ETA）。実 `Sut` アダプタ
-  （オーケストレーター＋stub）を実装し、`scenarios/S1,S2` をエンジンで緑にするのが完了条件。
+- **完了**: Phase 0、Phase 1（printer-stub）、Phase 2（implicit FTPS 990）、シナリオランナー
+  （`src/verify/`）、**Phase 3（コアループ）**:
+  - 3a `src/db/`（schema/migrations/typed Repo、invariant CHECK）
+  - 3b `src/orchestrator/dispatcher.ts`（キュー state machine / ディスパッチ / project block）
+  - 3c `src/orchestrator/`（MQTT/FTPS クライアント + ETA、実stubに対し統合テスト）
+  - 3d `src/verify/stub-sut.ts`（DB+dispatcher+VirtualPrinter を束ねる実 `Sut`）→
+    **`scenarios/S1,S2` がランナー経由で緑**（= Phase 3 完了条件、達成）。checkInvariant は
+    実フック（transition ログ/送信 mapping/通知/ETA計算）で機械判定、未実装 INV は false で明示失敗。
+- **次**: 監視ループ（spec ⑦ MQTT status→dispatcher.onFinished/onFailed、`src/orchestrator/monitor.ts`）
+  を実装して S1/S2 を「直接 onFinished 呼び」から「MQTT駆動」へ移行。以降 Phase 4（注入）/5（異常系,
+  S3–S8）/6（UI）/7（ゲートウェイ, printfarm/* → Tab5）。
