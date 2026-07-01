@@ -1,0 +1,313 @@
+# invariants.yaml — 仕様の機械可読な不変条件
+#
+# 役割：dev-plan-and-ai-verify.md の「①仕様の不変条件化」。
+#   仕様書 multiplate-auto-print-spec.md の各章を、検証可能な不変条件に落とす。
+#   これがAI verify（②シナリオ生成・③実行判定）の「正解」になる。
+#
+# 運用ルール：
+#   - 不変条件は実装より先に書く（テスト駆動の精神）。
+#   - 仕様変更時は必ずこのファイルも更新し「仕様＝不変条件＝テスト」を一致させる。
+#   - AIが下書き、人間がレビューして承認・リポジトリ管理する（このファイルは初版ドラフト）。
+#
+# フィールド：
+#   id      … INV-<DOMAIN>-NN。シナリオの targets / expect から参照される安定キー。
+#   spec    … 根拠となる仕様書の章。トレーサビリティ用。
+#   desc    … 人間向けの一文説明。
+#   check   … 検証ロジックの疑似条件。
+#   layer   … machine（厳密assertで判定） | ai（自然言語・意味判定をAIに委ねる）。
+#             dev-plan B-③の「機械判定層／AI判定層」に対応。AI判定層は最小限に絞る。
+
+invariants:
+
+  # ── ストッカー（プレート枚数）管理：spec 11章 ──────────────────────
+  - id: INV-STOCKER-01
+    spec: "11"
+    desc: "ストッカー残数は決して負にならない"
+    check: "stocker.remaining >= 0 at all times"
+    layer: machine
+
+  - id: INV-STOCKER-02
+    spec: "11"
+    desc: "スワップ1回ごとに残数がちょうど1減る（成功完了・強制排出の両方）"
+    check: "on swap_executed (success finish OR forced eject), remaining decreases by exactly 1"
+    layer: machine
+
+  - id: INV-STOCKER-03
+    spec: "11"
+    desc: "セッション開始時に既にセットされている1枚はストッカー消費にカウントしない"
+    check: "first plate of a session does not decrement remaining"
+    layer: machine
+
+  - id: INV-STOCKER-04
+    spec: "11, 6"
+    desc: "残数0でのディスパッチは stocker_refill(blocking_queue) を生み、キューを止める"
+    check: "dispatch with stocker.remaining <= 0 => pending_action(stocker_refill, blocking_queue) created AND no job transitions to printing"
+    layer: machine
+
+  - id: INV-STOCKER-05
+    spec: "11"
+    desc: "残数は capacity を超えない（refill は capacity までのリセット）"
+    check: "stocker.remaining <= stocker.capacity at all times"
+    layer: machine
+
+  # ── ディスパッチ／キューstate machine：spec 6章・12章 ─────────────
+  - id: INV-DISPATCH-01
+    spec: "12"
+    desc: "あるプロジェクトが color_decision 待ちでも、別プロジェクトのジョブは進む"
+    check: "blocked project's pending color_decision does not prevent other projects' queued jobs from dispatching"
+    layer: machine
+
+  - id: INV-DISPATCH-02
+    spec: "12, 6"
+    desc: "ディスパッチは position 昇順で queued ジョブを選ぶ"
+    check: "dispatched job is the lowest-position 'queued' job whose project is not blocked"
+    layer: machine
+
+  - id: INV-DISPATCH-03
+    spec: "6"
+    desc: "印刷中ジョブは同時に1つだけ（A1は単機）"
+    check: "count(jobs where status == 'printing') <= 1 at all times"
+    layer: machine
+
+  - id: INV-DISPATCH-04
+    spec: "6, 12"
+    desc: "ディスパッチ順序：ストッカー残数チェック→プロジェクトブロックチェック→送信"
+    check: "no FTPS upload / print_start occurs before both stocker-check and project-block-check pass"
+    layer: machine
+
+  - id: INV-QUEUE-01
+    spec: "4"
+    desc: "ジョブの status は許可された遷移のみをたどる"
+    check: "status transitions are a subset of: processing->queued->printing->{success|failed|aborted}; printing->waiting_for_refill allowed; failed/aborted->queued only via explicit retry"
+    layer: machine
+
+  - id: INV-QUEUE-02
+    spec: "18"
+    desc: "自動retryループは存在しない（retryは常に人間操作起点）"
+    check: "no status transition from failed/aborted to queued occurs without a corresponding retry API call"
+    layer: machine
+
+  - id: INV-QUEUE-03
+    spec: "18"
+    desc: "attempts が上限を超えたらキューを止め、通知のみ（自動再投入しない）"
+    check: "job.attempts > RETRY_LIMIT => queue halts for that job, notification sent, no auto re-dispatch"
+    layer: machine
+
+  # ── フィラメント切れの段階的解決：spec 14章 ───────────────────────
+  - id: INV-RUNOUT-01
+    spec: "14, 13"
+    desc: "manualポリシー時、フィラメント切れは必ず pending_action(filament_runout) を生む"
+    check: "effective_policy == 'manual' AND runout => pending_action(filament_runout, blocking_job) created AND no auto slot-switch"
+    layer: machine
+
+  - id: INV-RUNOUT-02
+    spec: "14, 12"
+    desc: "色が代替されたジョブは完了通知に必ずその旨が含まれる"
+    check: "job.substituted_color != null => that job's finish notification text mentions the substitution"
+    layer: ai
+
+  - id: INV-RUNOUT-03
+    spec: "14"
+    desc: "same_color_only は同タイプ・同色スロットにしか切替えない"
+    check: "policy == 'same_color_only' AND switched => target.type == runout.type AND target.color == runout.color"
+    layer: machine
+
+  - id: INV-RUNOUT-04
+    spec: "14"
+    desc: "allow_material_match の切替は同タイプに限る（色違いは許容、タイプ違いは不可）"
+    check: "policy == 'allow_material_match' AND switched => target.type == runout.type"
+    layer: machine
+
+  - id: INV-RUNOUT-05
+    spec: "14"
+    desc: "代替候補が無ければ自動続行せず filament_runout(blocking_job) を生む"
+    check: "no candidate slot (other slot, same constraints, remaining_g > MIN_THRESHOLD_G) => pending_action(filament_runout) created, no slot-switch"
+    layer: machine
+
+  - id: INV-RUNOUT-06
+    spec: "14"
+    desc: "色が代替された場合のみ substituted_slot / substituted_color が記録される"
+    check: "substituted_color != null IFF an auto-switch landed on a slot whose color != runout.color"
+    layer: machine
+
+  - id: INV-RUNOUT-07
+    spec: "14"
+    desc: "残量しきい値未満のスロットは代替候補にならない"
+    check: "any switch target has remaining_g > MIN_THRESHOLD_G"
+    layer: machine
+
+  # ── プロジェクトの色一貫性ポリシー：spec 12章 ─────────────────────
+  - id: INV-PROJECT-01
+    spec: "12"
+    desc: "strict：代替色が起きたプレート完了時、同プロジェクトの後続は color_decision で停止"
+    check: "policy == 'strict' AND plate finished with substitution => pending_action(color_decision, blocking_job) created AND same-project queued jobs do not dispatch while unresolved"
+    layer: machine
+
+  - id: INV-PROJECT-02
+    spec: "12"
+    desc: "propagate：代替色を同プロジェクトの後続queued全部に自動適用し、停止しない"
+    check: "policy == 'propagate' AND substitution => remaining queued jobs of same project get substituted_slot applied AND no color_decision pending_action created"
+    layer: machine
+
+  - id: INV-PROJECT-03
+    spec: "12"
+    desc: "project_id が無い単発ジョブはポリシー処理の対象外（色一貫性判定をしない）"
+    check: "job.project_id == null => no color_decision pending_action AND no propagation triggered for that job"
+    layer: machine
+
+  # ── G-code注入パイプライン：spec 7章 ──────────────────────────────
+  - id: INV-INJECT-01
+    spec: "7"
+    desc: "注入後のgcodeは必ずMD5サイドカーが再計算されている"
+    check: "after injection, Metadata/plate_N.gcode.md5 == md5(new Metadata/plate_N.gcode)"
+    layer: machine
+
+  - id: INV-INJECT-02
+    spec: "7"
+    desc: "未解決のプレースホルダー文字列を生のままgcodeに書き込まない"
+    check: "injected gcode contains no known '{name}' placeholder left unresolved (unknown placeholders allowed but logged)"
+    layer: machine
+
+  - id: INV-INJECT-03
+    spec: "7"
+    desc: "注入は一時コピー上で行い、元アーカイブ/ライブラリファイルは一切変更しない"
+    check: "original uploaded .gcode.3mf bytes are unchanged after injection (injection writes to a temp copy)"
+    layer: machine
+
+  - id: INV-INJECT-04
+    spec: "7"
+    desc: "終了側スニペットは印刷G-codeの最終行の後に追記される"
+    check: "swap/end snippet appears after the last original gcode line of the plate"
+    layer: machine
+
+  - id: INV-INJECT-05
+    spec: "7"
+    desc: "開始側注入はマーカー位置、無ければ先頭prependにフォールバックし警告を出す"
+    check: "start snippet injected at '; MACHINE_START_GCODE_END'; if marker absent => prepended AND warning logged"
+    layer: machine
+
+  - id: INV-INJECT-06
+    spec: "5"
+    desc: "アップロードのたびに最新configから再抽出し、古いメタデータをキャッシュしない"
+    check: "filaments/ams_mapping for a job are derived from the just-uploaded archive's project_settings.config, not a prior cache"
+    layer: machine
+
+  # ── MQTT通信仕様：spec 9章 ────────────────────────────────────────
+  - id: INV-MQTT-01
+    spec: "9"
+    desc: "ams_mapping は必ず4要素固定（5要素にしない）"
+    check: "every print 'project_file' command has ams_mapping.length == 4"
+    layer: machine
+
+  - id: INV-MQTT-02
+    spec: "9, 6"
+    desc: "中止は stop の直後に排出専用ジョブを通常ジョブとして送る"
+    check: "on abort, a 'stop' command is followed by dispatch of the dedicated eject job (homing + swap sequence) before the slot is considered safe"
+    layer: machine
+
+  - id: INV-MQTT-03
+    spec: "2, 3"
+    desc: "A1 mini本体への直接接続はオーケストレーター1点に集約（接続数制限対策）"
+    check: "only the orchestrator opens MQTT(8883)/FTPS(990) sessions to the printer; browser/IoT clients never connect directly"
+    layer: machine
+
+  # ── ETA計算：spec 10章 ────────────────────────────────────────────
+  - id: INV-ETA-01
+    spec: "10"
+    desc: "印刷中ジョブのETAはMQTTの mc_remaining_time を基準にする"
+    check: "while gcode_state == RUNNING, the current job's ETA derives from mc_remaining_time, not the static estimate"
+    layer: machine
+
+  - id: INV-ETA-02
+    spec: "10"
+    desc: "未着手ジョブ間には毎回 SWAP_DURATION_MS が加算される"
+    check: "projectEta accounts for one SWAP_DURATION_MS per queued plate boundary"
+    layer: machine
+
+  - id: INV-ETA-03
+    spec: "10"
+    desc: "ETAは単調（後ろのプレートほど plateEta が遅い）"
+    check: "for queued jobs in position order, plateEtas are non-decreasing"
+    layer: machine
+
+  # ── pending_actions 統一モデルと通知：spec 13章・15章 ─────────────
+  - id: INV-PENDING-01
+    spec: "13"
+    desc: "filament_confirm：AMS実装填とgcode要求が完全一致なら advisory で自動queued化"
+    check: "ams loaded state exactly matches gcode demand => job auto-queued AND filament_confirm severity == 'advisory'"
+    layer: machine
+
+  - id: INV-PENDING-02
+    spec: "13"
+    desc: "filament_confirm：不一致時は blocking_job に格上げし、自動queued化しない"
+    check: "ams/gcode mismatch => filament_confirm severity == 'blocking_job' AND job stays in 'processing'"
+    layer: machine
+
+  - id: INV-PENDING-03
+    spec: "13"
+    desc: "blocking_queue の未解決 pending_action は定期的に再通知される"
+    check: "unresolved pending_action with severity == 'blocking_queue' AND notified_at older than escalation interval => re-notified AND notified_at updated"
+    layer: machine
+
+  - id: INV-PENDING-04
+    spec: "13"
+    desc: "pending_action 通知には必ず該当ジョブ/プロジェクトへのディープリンクが含まれる"
+    check: "every pending_action notification payload contains a deep link URL to the related job/project"
+    layer: machine
+
+  - id: INV-PENDING-05
+    spec: "13"
+    desc: "解決済み（resolved_at != null）の pending_action は再通知されない"
+    check: "pending_action with resolved_at != null is never re-notified"
+    layer: machine
+
+  - id: INV-NOTIFY-01
+    spec: "15"
+    desc: "失敗・補充待ち・pending登録・タイムアウト検知で通知が飛ぶ"
+    check: "each of {job_failed, waiting_for_refill, pending_action created, timeout detected} triggers exactly one notification dispatch"
+    layer: machine
+
+  - id: INV-NOTIFY-02
+    spec: "20.8"
+    desc: "通知の副作用（スナップショット取得等）はタイムアウトガードされ、詰まっても完了通知自体は出る"
+    check: "a hung snapshot/side-effect does not block the finish/failure notification from being sent (timeout guard fires)"
+    layer: machine
+
+  # ── 異常系・排出：spec 6章・18章 ──────────────────────────────────
+  - id: INV-FAIL-01
+    spec: "6, 18"
+    desc: "異常終了は自動中止＋排出で機構を安全状態に戻し、status:failed と pending_action を残す"
+    check: "on abnormal end/timeout => stop + eject job sent, stocker decremented, job.status == 'failed', pending_action(retry_decision) created"
+    layer: machine
+
+  - id: INV-FAIL-02
+    spec: "20.5"
+    desc: "swapシステム故障は次ディスパッチを即FAILEDにして間接再現でき、ストッカー消費のズレを検知できる"
+    check: "injected swap-fault => next dispatched print ends FAILED AND the stocker/consumption discrepancy is surfaced (not silently lost)"
+    layer: machine
+
+  # ── 再同期（取りこぼし）：spec 9章・20.5章・19章 ──────────────────
+  - id: INV-RESYNC-01
+    spec: "20.5, 19"
+    desc: "FINISH直前に切断されても、再接続後に完了が検知される（取りこぼさない）"
+    check: "fault(on_state_transition:FINISH) => after reconnect, job eventually reaches 'success' (re-sync full-poll picks up the missed FINISH)"
+    layer: machine
+
+  - id: INV-RESYNC-02
+    spec: "20.5"
+    desc: "再接続時には必ず最新statusを1回フルポーリングする"
+    check: "on MQTT reconnect, orchestrator performs at least one full status poll before resuming normal incremental handling"
+    layer: machine
+
+  # ── 状態整合性（横断不変条件） ────────────────────────────────────
+  - id: INV-CONSISTENCY-01
+    spec: "6, 11"
+    desc: "成功/失敗で終わったジョブの総数とストッカー減算回数が一致する（初期1枚ぶんを除く）"
+    check: "count(jobs reaching success|failed via a real print that caused a swap) == (capacity_at_start - stocker.remaining) accounting for refills and the uncounted initial plate"
+    layer: machine
+
+  - id: INV-CONSISTENCY-02
+    spec: "13"
+    desc: "blocking_queue が未解決の間、新規ディスパッチは発生しない"
+    check: "while any unresolved pending_action has severity == 'blocking_queue', no job transitions to 'printing'"
+    layer: machine

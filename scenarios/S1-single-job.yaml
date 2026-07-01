@@ -1,0 +1,47 @@
+name: "単一ジョブが投入→確認→ディスパッチ→完走し、ストッカーが1減る（正常系の最小単位）"
+targets:
+  - INV-PENDING-01      # AMS一致なら advisory で自動queued
+  - INV-DISPATCH-03     # 同時印刷は1つ
+  - INV-DISPATCH-04     # 残数チェック→送信の順序
+  - INV-MQTT-01         # ams_mapping 4要素
+  - INV-STOCKER-02      # 1完走 = remaining -1
+  - INV-STOCKER-03      # 初期1枚は事前デクリメントしない
+  - INV-QUEUE-01        # 許可された status 遷移のみ
+  - INV-NOTIFY-01       # 完了で通知が1回飛ぶ
+
+setup:
+  # プロジェクト無しの単発プレート。AMSはgcode要求とぴったり一致させる（→自動queued化を狙う）。
+  jobs:
+    - id: plateA
+      est_seconds: 600
+      filaments: [{ slot: 2, color: "#FF0000", type: "PLA" }]
+      ams_mapping: [-1, -1, 0, -1]   # spec 9章の4要素固定例
+  ams:
+    - { slot: 2, color: "#FF0000", type: "PLA", remaining_g: 800 }
+  stocker: { capacity: 10, remaining: 10 }
+  system_settings: { filament_runout_policy: manual }
+  speed_factor: 6000
+
+steps:
+  - upload: plateA
+  # AMS実装填とgcode要求が完全一致 → filament_confirm は advisory、自動で queued になる。
+  - confirm_filaments: plateA
+  - assert: { job: plateA, state: queued }
+  - assert: { pending_action: filament_confirm, exists: false }   # advisory扱いでブロックしない
+  - assert: { invariant: INV-PENDING-01 }
+
+  - dispatch_all
+  - wait_until: { job: plateA, state: printing }
+  - assert: { printing_count: 1 }
+  - assert: { invariant: INV-MQTT-01 }          # 送信された project_file の ams_mapping が4要素
+  - assert: { stocker: { remaining: 10 } }       # 印刷開始時点ではまだ減らない（スワップは完了時）
+
+  - finish_current
+  - wait_until: { job: plateA, state: success }
+  - assert: { printing_count: 0 }
+  - assert: { stocker: { remaining: 9 } }        # 完走に伴うスワップで -1（INV-STOCKER-02）
+
+expect:
+  - INV-STOCKER-03: "開始時 remaining==capacity==10、事前デクリメント無し"
+  - INV-QUEUE-01:   "plateA の遷移は processing->queued->printing->success のみ"
+  - INV-NOTIFY-01:  "job_finished 通知がちょうど1回送出された"

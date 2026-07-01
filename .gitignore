@@ -1,0 +1,22 @@
+node_modules/
+bun.lockb
+*.log
+dist/
+.DS_Store
+
+# generated TLS material for the stub (never commit keys)
+certs/
+*.pem
+*.key
+*.crt
+
+# local runtime data
+*.sqlite
+*.sqlite-*
+data/
+.tmp/
+
+# env-specific config (public repo — keep real addresses/codes/keys out of git)
+.env
+.env.local
+!.env.example

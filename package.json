@@ -1,0 +1,27 @@
+{
+  "name": "a1-mini-auto-swap",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "description": "Bambu A1 mini multi-plate auto-print orchestrator + printer-stub (self-hosted controller host, no-cloud)",
+  "scripts": {
+    "stub": "bun run src/stub/main.ts",
+    "test": "bun test",
+    "test:ci": "bun test test/stub",
+    "test:stub": "bun test test/stub",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "certs": "bun run scripts/gen-certs.ts"
+  },
+  "dependencies": {
+    "aedes": "^0.51.3",
+    "hono": "^4.6.14"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "@types/node": "^22.10.2",
+    "basic-ftp": "^6.0.1",
+    "mqtt": "^5.10.3",
+    "typescript": "^5.7.2"
+  }
+}

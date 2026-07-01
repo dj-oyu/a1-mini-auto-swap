@@ -1,0 +1,76 @@
+name: "3ジョブをキューに積み、1機を専有して position 順に1枚ずつ完走、ストッカーが3減る"
+targets:
+  - INV-DISPATCH-02     # position 昇順で選ぶ
+  - INV-DISPATCH-03     # 同時印刷は常に1つ以下
+  - INV-DISPATCH-04     # 残数チェック→送信の順序
+  - INV-QUEUE-01        # 許可された status 遷移のみ
+  - INV-STOCKER-02      # 1完走 = remaining -1
+  - INV-ETA-02          # プレート境界ごとに SWAP_DURATION_MS 加算
+  - INV-ETA-03          # plateEtas は単調非減少
+  - INV-CONSISTENCY-01  # 完走数とストッカー減算が一致
+
+setup:
+  # 同一AMSで完走できる3枚。プロジェクトには所属させない（色一貫性は S5 系で検証）。
+  jobs:
+    - id: plateA
+      est_seconds: 600
+      filaments: [{ slot: 2, color: "#FF0000", type: "PLA" }]
+      ams_mapping: [-1, -1, 0, -1]
+    - id: plateB
+      est_seconds: 900
+      filaments: [{ slot: 2, color: "#FF0000", type: "PLA" }]
+      ams_mapping: [-1, -1, 0, -1]
+    - id: plateC
+      est_seconds: 300
+      filaments: [{ slot: 2, color: "#FF0000", type: "PLA" }]
+      ams_mapping: [-1, -1, 0, -1]
+  ams:
+    - { slot: 2, color: "#FF0000", type: "PLA", remaining_g: 2400 }
+  stocker: { capacity: 10, remaining: 10 }
+  system_settings: { filament_runout_policy: manual }
+  speed_factor: 6000
+
+steps:
+  - upload: plateA
+  - upload: plateB
+  - upload: plateC
+  - confirm_filaments: plateA
+  - confirm_filaments: plateB
+  - confirm_filaments: plateC
+  - assert: { job: plateA, state: queued }
+  - assert: { job: plateB, state: queued }
+  - assert: { job: plateC, state: queued }
+
+  - dispatch_all
+
+  # --- 1枚目：position 最小の plateA から ---
+  - wait_until: { job: plateA, state: printing }
+  - assert: { printing_count: 1 }          # 単機専有：他はまだ queued
+  - assert: { job: plateB, state: queued }
+  - assert: { job: plateC, state: queued }
+  - assert: { invariant: INV-ETA-03 }      # この時点の plateEtas が単調
+  - finish_current
+  - wait_until: { job: plateA, state: success }
+  - assert: { stocker: { remaining: 9 } }
+
+  # --- 2枚目：plateB（plateC より position が前）---
+  - wait_until: { job: plateB, state: printing }
+  - assert: { printing_count: 1 }
+  - assert: { job: plateC, state: queued }
+  - finish_current
+  - wait_until: { job: plateB, state: success }
+  - assert: { stocker: { remaining: 8 } }
+
+  # --- 3枚目：plateC ---
+  - wait_until: { job: plateC, state: printing }
+  - assert: { printing_count: 1 }
+  - finish_current
+  - wait_until: { job: plateC, state: success }
+  - assert: { stocker: { remaining: 7 } }
+
+  - assert: { printing_count: 0 }
+
+expect:
+  - INV-DISPATCH-02:    "完走順が position 昇順 plateA->plateB->plateC に一致"
+  - INV-CONSISTENCY-01: "3完走 = 10-7 = 3スワップ、ズレ無し"
+  - INV-ETA-02:         "projectEta に SWAP_DURATION_MS が3プレート境界ぶん含まれる"
