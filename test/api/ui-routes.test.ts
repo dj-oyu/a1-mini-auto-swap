@@ -144,6 +144,45 @@ describe("GET / (dashboard SSR)", () => {
     });
   });
 
+  describe("printing header (MVP #4)", () => {
+    test("renders no header when nothing is printing", async () => {
+      repo.createJob({ filename: "waiting.3mf" }); // stays 'processing'
+      const r = await body();
+      // the <section> is absent (the string also appears in the client script,
+      // so assert on the rendered element, not the bare attribute)
+      expect(r.text).not.toContain('<section class="printing"');
+    });
+
+    test("shows the active plate with start epoch + estimate for the client clock", async () => {
+      const id = repo.createJob({ filename: "live.gcode.3mf", estimated_seconds: 3600 });
+      repo.updateStatus(id, "printing");
+      const job = repo.getJob(id)!;
+      const expectedStart = Date.parse(job.updated_at.replace(" ", "T") + "Z");
+
+      const r = await body();
+      expect(r.text).toContain('<section class="printing"');
+      expect(r.text).toContain("live.gcode.3mf");
+      expect(r.text).toContain(`data-start="${expectedStart}"`);
+      expect(r.text).toContain('data-est="3600"');
+      expect(r.text).toContain('class="prog-bar"');
+    });
+
+    test("the header lives inside the reactive fragment (refreshes via SSE)", async () => {
+      const id = repo.createJob({ filename: "live.3mf", estimated_seconds: 1200 });
+      repo.updateStatus(id, "printing");
+      const res = await app.request("/ui/dashboard");
+      const text = await res.text();
+      expect(text).toContain('<section class="printing"');
+      expect(text).toContain("live.3mf");
+    });
+
+    test("the client script computes % and finish-time", async () => {
+      const r = await body();
+      expect(r.text).toContain("updatePrinting");
+      expect(r.text).toContain("toLocaleTimeString");
+    });
+  });
+
   describe("live updates (MVP #3)", () => {
     test("the page subscribes to the SSE stream", async () => {
       const r = await body();
