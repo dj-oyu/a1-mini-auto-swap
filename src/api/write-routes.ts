@@ -129,6 +129,13 @@ export function createWriteApp(deps: { repo: Repo; dispatcher: Dispatcher }): Ho
     if (id === null) return c.json({ error: "invalid job id" }, 404);
     if (!repo.getJob(id)) return c.json({ error: "job not found" }, 404);
     const requeued = await dispatcher.retry(id);
+    // The human has decided: clear the job's retry_decision pending so it doesn't
+    // linger in 対応待ち after the job is re-queued.
+    if (requeued) {
+      for (const a of repo.getUnresolvedPendingActions()) {
+        if (a.type === "retry_decision" && a.job_id === id) repo.resolvePendingAction(a.id);
+      }
+    }
     return c.json({ requeued });
   });
 

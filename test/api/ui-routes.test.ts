@@ -144,6 +144,34 @@ describe("GET / (dashboard SSR)", () => {
     });
   });
 
+  describe("card actions (retry / delete)", () => {
+    test("a failed card offers リトライ and 削除; the client wires both", async () => {
+      const id = repo.createJob({ filename: "boom.3mf" });
+      repo.updateStatus(id, "failed", "plate slipped");
+      const r = await body();
+      expect(r.text).toContain(`data-retry="${id}"`);
+      expect(r.text).toContain(`data-delete="${id}"`);
+      expect(r.text).toContain("/retry");
+      expect(r.text).toContain("method: 'DELETE'");
+    });
+
+    test("a queued card offers 削除 but not リトライ", async () => {
+      const id = repo.createJob({ filename: "q.3mf" });
+      repo.updateStatus(id, "queued");
+      const r = await body();
+      expect(r.text).toContain(`data-delete="${id}"`);
+      expect(r.text).not.toContain(`data-retry="${id}"`);
+    });
+
+    test("a printing card offers neither (cannot delete/retry a live print)", async () => {
+      const id = repo.createJob({ filename: "live.3mf" });
+      repo.updateStatus(id, "printing");
+      const r = await body();
+      expect(r.text).not.toContain(`data-delete="${id}"`);
+      expect(r.text).not.toContain(`data-retry="${id}"`);
+    });
+  });
+
   describe("thumbnails (MVP #6)", () => {
     test("queue cards reference the job's thumbnail endpoint and hide it if absent", async () => {
       const id = repo.createJob({ filename: "p.3mf" });

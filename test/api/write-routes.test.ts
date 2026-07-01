@@ -200,6 +200,27 @@ describe("POST /api/queue/:id/retry", () => {
     expect(repo.getJob(id)?.status).toBe("queued");
   });
 
+  test("resolves the job's retry_decision pending when it requeues", async () => {
+    const id = repo.createJob({ filename: "a.3mf" });
+    repo.updateStatus(id, "failed", "boom");
+    const pid = repo.createPendingAction({ type: "retry_decision", severity: "blocking_job", job_id: id });
+    expect(repo.getUnresolvedPendingActions().some((a) => a.id === pid)).toBe(true);
+
+    await app.request(`/api/queue/${id}/retry`, { method: "POST" });
+    expect(repo.getUnresolvedPendingActions().some((a) => a.id === pid)).toBe(false);
+  });
+
+  test("leaves the retry_decision pending when the retry cap is hit", async () => {
+    const id = repo.createJob({ filename: "a.3mf" });
+    repo.updateStatus(id, "failed", "boom");
+    for (let i = 0; i < 4; i++) repo.incrementAttempts(id);
+    const pid = repo.createPendingAction({ type: "retry_decision", severity: "blocking_job", job_id: id });
+
+    const res = await app.request(`/api/queue/${id}/retry`, { method: "POST" });
+    expect(await res.json()).toEqual({ requeued: false });
+    expect(repo.getUnresolvedPendingActions().some((a) => a.id === pid)).toBe(true); // still needs a human
+  });
+
   test("requeued: false once past the retry cap (default 3)", async () => {
     const id = repo.createJob({ filename: "a.3mf" });
     repo.updateStatus(id, "failed", "boom");
