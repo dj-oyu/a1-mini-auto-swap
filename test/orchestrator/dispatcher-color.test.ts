@@ -10,6 +10,7 @@ class FakePrinter implements PrinterPort {
     this.started.push(job.id);
   }
   async ejectAndReset(): Promise<void> {}
+  async resumeWithAlternateSlot(): Promise<void> {}
 }
 
 let dbh: Db;

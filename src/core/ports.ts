@@ -7,6 +7,7 @@ import type {
   Severity,
   StockerRow,
 } from "./types.ts";
+import type { AmsTray } from "./runout.ts";
 
 /**
  * Core ports (hexagonal boundaries). The domain services (dispatcher, …) depend
@@ -21,6 +22,14 @@ export interface PrinterPort {
   startPrint(job: JobRow): Promise<void>;
   /** Return the mechanism to a safe state after a failure/abort (homing + swap). */
   ejectAndReset(): Promise<void>;
+  /** Resume a paused (runout) print on an alternate AMS slot (spec 14/16 —
+   *  exact MQTT command unverified; adapters may best-effort or no-op). */
+  resumeWithAlternateSlot(jobId: number, slot: number): Promise<void>;
+}
+
+/** Live AMS state provider (adapter: derived from MQTT status, or a fake). */
+export interface AmsProvider {
+  getTrays(): AmsTray[];
 }
 
 /** Notification event (spec 13/15). Kept structural so adapters (webhook,
@@ -32,6 +41,7 @@ export interface NotifyEvent {
     | "job_failed"
     | "waiting_for_refill"
     | "pending_action"
+    | "filament_switched"
     | "timeout";
   jobId?: number;
   projectId?: number;
@@ -67,6 +77,7 @@ export interface QueueStore {
   decrementStocker(): void;
   getUnresolvedPendingActions(): PendingActionRow[];
   hasUnresolvedPendingAction(projectId: number, type: PendingActionType): boolean;
+  getSetting(key: string): string | null;
   createPendingAction(input: {
     type: PendingActionType;
     severity: Severity;
