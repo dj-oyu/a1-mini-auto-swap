@@ -69,8 +69,7 @@ docs 更新 ／ **秘密・環境固有情報なし**。
 ## フェーズ状況
 
 - **完了**: Phase 0（足場）、Phase 1（printer-stub: MQTT/TLS + `__control` + 決定論 state machine）、
-  **Phase 2（implicit FTPS 990: `ftps-server.ts`、STOR/PROT P/PROT C、`main.ts` に組込・
-  diagnostics 反映）**。
-- **次（Phase 3 の前提）**: `scenarios/*.yaml` を stub＋オーケストレーターに対して実行する
-  **シナリオランナー（AI-verify ③）を実装**する（S1/S2… の完了判定を機械化する投資）。
-- その後 Phase 3（コアループ: キュー state machine / ディスパッチ / ETA、S1・S2 緑）。
+  Phase 2（implicit FTPS 990）、**シナリオランナー（AI-verify ③）のエンジン**
+  （`src/verify/`: DSL パーサ + `Sut` アダプタ抽象 + `runScenario`。フェイクで単体検証済み）。
+- **次**: Phase 3（コアループ: キュー state machine / ディスパッチ / ETA）。実 `Sut` アダプタ
+  （オーケストレーター＋stub）を実装し、`scenarios/S1,S2` をエンジンで緑にするのが完了条件。
