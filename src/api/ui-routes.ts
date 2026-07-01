@@ -213,6 +213,36 @@ function stockerChip(stocker: StockerRow | null): Html {
   return html`<span class="chip ${low}">プレート ${stocker.remaining}/${stocker.capacity}</span>`;
 }
 
+/** SQLite stores datetime('now') as "YYYY-MM-DD HH:MM:SS" in UTC (no tz). Turn
+ *  it into an epoch-ms number for the client; NaN if unparseable. */
+function sqliteUtcToEpoch(ts: string): number {
+  return Date.parse(ts.replace(" ", "T") + "Z");
+}
+
+/** Live header for the currently-printing plate (spec 17 §7 / MVP #4). The
+ *  server emits the start epoch + estimate as data-* attributes; the client
+ *  (LIVE_SCRIPT) computes the % and the "終わる時刻" and ticks them between SSE
+ *  events. Deterministic server-side: derived purely from the row, no clock.
+ *  Progress is estimate-based until MQTT live remaining is plumbed in. */
+function printingHeader(jobs: JobRow[]): Html {
+  const job = jobs.find((j) => j.status === "printing");
+  if (!job) return html``;
+  const startMs = sqliteUtcToEpoch(job.updated_at);
+  const est = job.estimated_seconds ?? 0;
+  const startAttr = Number.isFinite(startMs) ? String(startMs) : "";
+  return html`
+    <section class="printing" data-printing data-start="${startAttr}" data-est="${est}">
+      <div class="printing-head">
+        <span class="badge blue">印刷中</span>
+        <span class="filename">${job.filename}</span>
+        <span class="eta-clock" data-eta>ETA —</span>
+      </div>
+      <div class="progressbar"><div class="prog-bar" style="width:0%"></div></div>
+      <div class="printing-sub"><span class="pct">—</span></div>
+    </section>
+  `;
+}
+
 interface DashboardData {
   jobs: JobRow[];
   stocker: StockerRow | null;
@@ -229,6 +259,7 @@ function renderDashboardInner(data: DashboardData): Html {
       : html`${jobs.map(jobCard)}`;
   return html`<div id="dashboard">
     <div class="statusline">${stockerChip(stocker)}</div>
+    ${printingHeader(jobs)}
     ${pendingBanner(pending)}
     <main><ul class="queue">${cards}</ul></main>
   </div>`;
@@ -258,6 +289,33 @@ function renderDashboard(data: DashboardData): Html {
 // now; moves to public/ alongside the CSS in a later slice.
 const LIVE_SCRIPT = `
   (function () {
+    // MVP #4: tick the printing header's % and finish-time locally between
+    // events (progress is estimate-based until MQTT live remaining lands).
+    function fmtClock(epoch) {
+      try { return new Date(epoch).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+      catch (e) { return '--:--'; }
+    }
+    function updatePrinting() {
+      var els = document.querySelectorAll('[data-printing]');
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        var start = Number(el.getAttribute('data-start'));
+        var est = Number(el.getAttribute('data-est'));
+        var bar = el.querySelector('.prog-bar');
+        var pctEl = el.querySelector('.pct');
+        var etaEl = el.querySelector('[data-eta]');
+        if (!start || !est) { if (pctEl) pctEl.textContent = '進行中'; continue; }
+        var pct = Math.max(0, Math.min(100, (Date.now() - start) / 1000 / est * 100));
+        if (bar) bar.style.width = pct.toFixed(1) + '%';
+        if (pctEl) pctEl.textContent = Math.floor(pct) + '%';
+        if (etaEl) etaEl.textContent = 'ETA ' + fmtClock(start + est * 1000);
+      }
+    }
+
+    updatePrinting();
+    setInterval(updatePrinting, 30000);
+    document.body.addEventListener('htmx:afterSwap', updatePrinting);
+
     if (!window.EventSource) return;
     var refresh = function () {
       if (window.htmx) window.htmx.ajax('GET', '/ui/dashboard', { target: '#dashboard', swap: 'outerHTML' });
@@ -277,6 +335,13 @@ const STYLES = `
   .topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;background:var(--card);border-bottom:1px solid var(--line)}
   .topbar h1{font-size:17px;margin:0}
   .statusline{display:flex;justify-content:flex-end;padding:12px 18px 0}
+  .printing{margin:12px 18px;padding:14px 16px;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--blue);border-radius:12px}
+  .printing-head{display:flex;gap:10px;align-items:center}
+  .printing-head .filename{font-weight:600;overflow-wrap:anywhere}
+  .printing-head .eta-clock{margin-left:auto;color:var(--blue);font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .progressbar{height:8px;background:#eef2f7;border-radius:999px;overflow:hidden;margin:10px 0 6px}
+  .prog-bar{height:100%;background:var(--blue);border-radius:999px;transition:width .4s ease}
+  .printing-sub{color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
   .chip{font-size:13px;padding:4px 10px;border-radius:999px;background:#eef2f7;color:var(--ink)}
   .chip.ok{background:#e8f5ee;color:var(--green)} .chip.amber{background:#fdf0e2;color:var(--amber)} .chip.red{background:#fdeaea;color:var(--red)} .chip.warn{background:#fdf0e2;color:var(--amber)}
   .banner{margin:14px 18px;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:var(--card)}
