@@ -139,6 +139,20 @@ export function createWriteApp(deps: { repo: Repo; dispatcher: Dispatcher }): Ho
     return c.json({ requeued });
   });
 
+  // POST /api/queue/:id/abort — spec ch8/19: stop the running plate (eject/reset,
+  // swap, auto-advance). 409 if the job isn't currently printing.
+  app.post("/api/queue/:id/abort", async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) return c.json({ error: "invalid job id" }, 404);
+    const job = repo.getJob(id);
+    if (!job) return c.json({ error: "job not found" }, 404);
+    if (job.status !== "printing") {
+      return c.json({ error: "only a printing job can be aborted" }, 409);
+    }
+    const aborted = await dispatcher.abort(id);
+    return c.json({ aborted });
+  });
+
   // DELETE /api/queue/:id — spec ch8: remove a job that isn't currently printing.
   app.delete("/api/queue/:id", (c) => {
     const id = parseId(c.req.param("id"));

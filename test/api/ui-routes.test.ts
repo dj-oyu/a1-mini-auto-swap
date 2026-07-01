@@ -163,12 +163,22 @@ describe("GET / (dashboard SSR)", () => {
       expect(r.text).not.toContain(`data-retry="${id}"`);
     });
 
-    test("a printing card offers neither (cannot delete/retry a live print)", async () => {
+    test("a printing card offers 中止 but not delete/retry", async () => {
       const id = repo.createJob({ filename: "live.3mf" });
       repo.updateStatus(id, "printing");
       const r = await body();
+      expect(r.text).toContain(`data-abort="${id}"`);
+      expect(r.text).toContain("中止");
       expect(r.text).not.toContain(`data-delete="${id}"`);
       expect(r.text).not.toContain(`data-retry="${id}"`);
+      expect(r.text).toContain("/abort"); // client wires the abort fetch
+    });
+
+    test("a non-printing card offers no 中止", async () => {
+      const id = repo.createJob({ filename: "q.3mf" });
+      repo.updateStatus(id, "queued");
+      const r = await body();
+      expect(r.text).not.toContain(`data-abort="${id}"`);
     });
   });
 

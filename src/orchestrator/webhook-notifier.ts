@@ -20,6 +20,7 @@ const TITLES: Record<NotifyEvent["type"], string> = {
   job_started: "▶️ 印刷開始",
   job_finished: "✅ 完了",
   job_failed: "❌ 失敗",
+  aborted: "🛑 中止",
   waiting_for_refill: "🪧 ストッカー補充",
   pending_action: "⚠️ 対応待ち",
   filament_switched: "ℹ️ フィラメント自動切替",

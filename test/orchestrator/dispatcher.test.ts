@@ -75,6 +75,29 @@ describe("Dispatcher — sequencing (INV-DISPATCH-02/03)", () => {
   });
 });
 
+describe("Dispatcher — abort (spec 8/19)", () => {
+  test("aborts the running plate: eject, aborted, swap -1, auto-advance", async () => {
+    const a = queuedJob("a");
+    const b = queuedJob("b");
+    await dispatcher.dispatchNext(); // a printing
+    expect(dbh.repo.getJob(a)!.status).toBe("printing");
+
+    const ok = await dispatcher.abort(a);
+    expect(ok).toBe(true);
+    expect(printer.ejects).toBe(1); // mechanism reset
+    expect(dbh.repo.getJob(a)!.status).toBe("aborted");
+    expect(dbh.repo.getStocker()!.remaining).toBe(9); // forced eject swap (-1)
+    expect(dbh.repo.getJob(b)!.status).toBe("printing"); // auto-advanced to b
+  });
+
+  test("is a no-op for a job that isn't printing", async () => {
+    const a = queuedJob("a"); // queued, not printing
+    expect(await dispatcher.abort(a)).toBe(false);
+    expect(dbh.repo.getJob(a)!.status).toBe("queued");
+    expect(printer.ejects).toBe(0);
+  });
+});
+
 describe("Dispatcher — stocker empty (INV-STOCKER-04)", () => {
   test("no dispatch, creates stocker_refill(blocking_queue); refill unblocks", async () => {
     dbh.repo.setStocker(5, 0);

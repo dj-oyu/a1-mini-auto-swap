@@ -136,6 +136,21 @@ export class Dispatcher {
     // no auto re-dispatch (INV-QUEUE-02): retry is a human action.
   }
 
+  /** Human-initiated stop of the running plate (spec 8/19): eject/reset the
+   *  mechanism, mark the job aborted, swap (-1, forced eject — INV-STOCKER-02),
+   *  then auto-advance to the next queued job. Only valid while printing; a
+   *  no-op (returns false) otherwise so a stale UI click can't corrupt state. */
+  async abort(jobId: number): Promise<boolean> {
+    const job = this.repo.getJob(jobId);
+    if (!job || job.status !== "printing") return false;
+    await this.printer.ejectAndReset();
+    this.repo.updateStatus(jobId, "aborted");
+    this.repo.decrementStocker();
+    this.notifier?.notify({ type: "aborted", jobId });
+    await this.dispatchNext();
+    return true;
+  }
+
   /** Human-triggered retry (spec 18). Re-queues unless the attempt cap is hit. */
   async retry(jobId: number): Promise<boolean> {
     const job = this.repo.getJob(jobId);

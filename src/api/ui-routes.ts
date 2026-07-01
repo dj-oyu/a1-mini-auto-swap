@@ -241,6 +241,9 @@ function jobCard(job: JobRow): Html {
  *  LIVE_SCRIPT). Delete is a two-step ("本当に削除？") — no native dialog. */
 function cardActions(job: JobRow): Html {
   const buttons: Html[] = [];
+  if (job.status === "printing") {
+    buttons.push(html`<button class="act danger" data-abort="${job.id}">中止</button>`);
+  }
   if (job.status === "failed") {
     buttons.push(html`<button class="act" data-retry="${job.id}">リトライ</button>`);
   }
@@ -629,6 +632,23 @@ const LIVE_SCRIPT = `
     // the per-slot AMS selects into a 4-element mapping and PATCHes the job.
     document.body.addEventListener('click', function (e) {
       if (e.target.hasAttribute && e.target.hasAttribute('data-close')) { closeModal(); return; }
+
+      // card action: abort the running job (two-step, no native dialog)
+      var abortBtn = e.target.closest && e.target.closest('[data-abort]');
+      if (abortBtn) {
+        if (abortBtn.getAttribute('data-armed') !== '1') {
+          abortBtn.setAttribute('data-armed', '1');
+          abortBtn.textContent = '本当に中止？';
+          return;
+        }
+        var aid = abortBtn.getAttribute('data-abort');
+        abortBtn.disabled = true;
+        fetch('/api/queue/' + aid + '/abort', { method: 'POST' })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function () { refresh(); })
+          .catch(function () { abortBtn.disabled = false; });
+        return;
+      }
 
       // card action: retry a failed job
       var retryBtn = e.target.closest && e.target.closest('[data-retry]');
