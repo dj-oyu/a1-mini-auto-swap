@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import type { QueueStore } from "../core/ports.ts";
 import type {
   ColorConsistencyPolicy,
   JobRow,
@@ -28,7 +29,7 @@ export interface CreatePendingActionInput {
 
 /** Typed data-access over the SQLite schema (spec ch4). Thin, synchronous
  *  (bun:sqlite is sync); business rules live in the dispatcher (slice 3b). */
-export class Repo {
+export class Repo implements QueueStore {
   constructor(private readonly db: Database) {}
 
   // ── projects ──────────────────────────────────────────────────────────────

@@ -1,10 +1,11 @@
-import type { Repo } from "../db/repo.ts";
-import type { JobRow } from "../db/types.ts";
-import type { PrinterPort } from "./printer-port.ts";
+import type { JobRow } from "./types.ts";
+import type { Notifier, PrinterPort, QueueStore } from "./ports.ts";
 
 export interface DispatcherOptions {
   /** Max attempts before retry halts and only notifies (spec 18, INV-QUEUE-03). */
   retryLimit?: number;
+  /** Notification sink (spec 13/15). Optional; no-op when absent. */
+  notifier?: Notifier;
 }
 
 export type DispatchOutcome =
@@ -24,13 +25,15 @@ export type DispatchOutcome =
  */
 export class Dispatcher {
   private readonly retryLimit: number;
+  private readonly notifier?: Notifier;
 
   constructor(
-    private readonly repo: Repo,
+    private readonly repo: QueueStore,
     private readonly printer: PrinterPort,
     opts: DispatcherOptions = {},
   ) {
     this.retryLimit = opts.retryLimit ?? 3;
+    this.notifier = opts.notifier;
   }
 
   /** processing -> queued (after filament confirmation). */
@@ -73,6 +76,7 @@ export class Dispatcher {
   async onFinished(jobId: number): Promise<void> {
     this.repo.updateStatus(jobId, "success");
     this.repo.decrementStocker();
+    this.notifier?.notify({ type: "job_finished", jobId }); // spec 15 (INV-NOTIFY-01)
     await this.dispatchNext();
   }
 
@@ -88,6 +92,7 @@ export class Dispatcher {
       job_id: jobId,
       message: error,
     });
+    this.notifier?.notify({ type: "job_failed", jobId, severity: "blocking_job", message: error });
     // no auto re-dispatch (INV-QUEUE-02): retry is a human action.
   }
 
@@ -113,6 +118,11 @@ export class Dispatcher {
     if (!exists) {
       this.repo.createPendingAction({
         type: "stocker_refill",
+        severity: "blocking_queue",
+        message: "ストッカーが空です",
+      });
+      this.notifier?.notify({
+        type: "waiting_for_refill",
         severity: "blocking_queue",
         message: "ストッカーが空です",
       });

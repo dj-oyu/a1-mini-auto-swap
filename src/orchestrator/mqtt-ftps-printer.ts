@@ -1,5 +1,5 @@
 import type { JobRow } from "../db/types.ts";
-import type { PrinterPort } from "./printer-port.ts";
+import type { PrinterPort } from "../core/ports.ts";
 import { OrchestratorMqttClient } from "./mqtt-client.ts";
 import { uploadBytes, type FtpsUploadOptions } from "./ftps-client.ts";
 
