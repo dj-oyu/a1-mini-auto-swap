@@ -111,4 +111,72 @@ describe("GET / (dashboard SSR)", () => {
       expect(r.text).toContain("#1f77b4");
     });
   });
+
+  describe("htmx wiring (MVP #2)", () => {
+    test("loads vendored htmx (not a CDN) and wraps the reactive area", async () => {
+      const r = await body();
+      expect(r.text).toContain('src="/vendor/htmx.min.js"');
+      expect(r.text).not.toContain("//unpkg");
+      expect(r.text).not.toContain("cdn");
+      expect(r.text).toContain('id="dashboard"');
+    });
+
+    test("serves the vendored htmx asset", async () => {
+      const res = await app.request("/vendor/htmx.min.js");
+      expect(res.status).toBe(200);
+      expect(await res.text()).toContain("htmx");
+    });
+
+    test("each pending row carries a resolve button targeting #dashboard", async () => {
+      const job = repo.createJob({ filename: "j.3mf" });
+      repo.createPendingAction({ type: "retry_decision", severity: "blocking_job", job_id: job });
+      const r = await body();
+      expect(r.text).toContain('hx-post="/ui/pending-actions/');
+      expect(r.text).toContain('hx-target="#dashboard"');
+      expect(r.text).toContain('hx-swap="outerHTML"');
+    });
+
+    test("a stocker_refill row offers a refill (not a plain resolve)", async () => {
+      repo.createPendingAction({ type: "stocker_refill", severity: "blocking_queue", message: "空" });
+      const r = await body();
+      expect(r.text).toContain('hx-post="/ui/stocker/refill"');
+      expect(r.text).toContain("補充完了");
+    });
+  });
+
+  describe("POST /ui/pending-actions/:id/resolve", () => {
+    test("resolves the action and returns the refreshed #dashboard fragment", async () => {
+      const job = repo.createJob({ filename: "j.3mf" });
+      const pid = repo.createPendingAction({
+        type: "retry_decision",
+        severity: "blocking_job",
+        job_id: job,
+      });
+      expect(repo.getUnresolvedPendingActions()).toHaveLength(1);
+
+      const res = await app.request(`/ui/pending-actions/${pid}/resolve`, { method: "POST" });
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).toContain('id="dashboard"');
+      expect(text).not.toContain("<!doctype html>"); // fragment, not a full page
+      expect(text).toContain("対応待ち 0");
+      expect(repo.getUnresolvedPendingActions()).toHaveLength(0);
+    });
+  });
+
+  describe("POST /ui/stocker/refill", () => {
+    test("refills to capacity and clears the stocker_refill pending", async () => {
+      repo.setStocker(8, 0);
+      repo.createPendingAction({ type: "stocker_refill", severity: "blocking_queue", message: "空" });
+
+      const res = await app.request("/ui/stocker/refill", { method: "POST" });
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).toContain('id="dashboard"');
+      expect(text).toContain("8/8");
+      expect(text).toContain("対応待ち 0");
+      expect(repo.getStocker()!.remaining).toBe(8);
+      expect(repo.getUnresolvedPendingActions()).toHaveLength(0);
+    });
+  });
 });
