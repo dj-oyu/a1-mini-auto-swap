@@ -174,6 +174,7 @@ function jobCard(job: JobRow): Html {
   const substituted = job.substituted_color != null;
   return html`
     <li class="card status-${meta.cls}" data-job-id="${job.id}">
+      <img class="card-thumb" src="/api/queue/${job.id}/thumbnail" alt="" loading="lazy" onerror="this.remove()" />
       <div class="card-main">
         <div class="card-title">
           <span class="badge ${meta.cls}">${meta.label}</span>
@@ -257,6 +258,7 @@ function renderConfirmPanel(job: JobRow | null): Html {
       <div class="modal-box" data-confirm-job="${job.id}">
         <h2 class="modal-title">フィラメント確認</h2>
         <p class="muted">${job.filename}</p>
+        <img class="confirm-thumb" src="/api/queue/${job.id}/thumbnail" alt="" onerror="this.remove()" />
         <div class="fil-list">${rows}</div>
         <div class="modal-actions">
           <button class="act" data-close>キャンセル</button>
@@ -561,7 +563,10 @@ const STYLES = `
   main{padding:0 18px 24px}
   .queue{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
   .empty{color:var(--muted);padding:24px;text-align:center}
-  .card{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--grey);border-radius:10px;padding:12px 14px}
+  .card{display:flex;gap:12px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--grey);border-radius:10px;padding:12px 14px}
+  .card-main{flex:1;min-width:0}
+  .card-thumb{width:56px;height:56px;flex:none;object-fit:cover;border-radius:8px;background:#eef2f7;border:1px solid var(--line)}
+  .confirm-thumb{display:block;width:100%;max-height:200px;object-fit:contain;background:#f6f7f9;border:1px solid var(--line);border-radius:10px;margin:8px 0 12px}
   .card.status-blue{border-left-color:var(--blue)} .card.status-green{border-left-color:var(--green)}
   .card.status-red{border-left-color:var(--red)} .card.status-amber{border-left-color:var(--amber)}
   .card.status-slate{border-left-color:var(--slate)} .card.status-grey{border-left-color:var(--grey)}
