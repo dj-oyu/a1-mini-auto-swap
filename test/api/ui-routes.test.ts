@@ -144,6 +144,22 @@ describe("GET / (dashboard SSR)", () => {
     });
   });
 
+  describe("upload control (MVP #5)", () => {
+    test("the header offers a 3MF file picker / drop zone", async () => {
+      const r = await body();
+      expect(r.text).toContain('id="dropzone"');
+      expect(r.text).toContain('id="fileInput"');
+      expect(r.text).toContain('accept=".gcode.3mf,.3mf"');
+    });
+
+    test("the client uploads to POST /api/queue then opens the confirm modal", async () => {
+      const r = await body();
+      expect(r.text).toContain("/api/queue?filename=");
+      expect(r.text).toContain("openConfirm");
+      expect(r.text).toContain("uploadFile");
+    });
+  });
+
   describe("filament-confirm modal (MVP #5)", () => {
     test("processing cards offer a フィラメント確認 button loading the modal", async () => {
       repo.createJob({ filename: "new.3mf" }); // stays 'processing'
@@ -157,8 +173,10 @@ describe("GET / (dashboard SSR)", () => {
       const id = repo.createJob({ filename: "done.3mf" });
       repo.updateStatus(id, "queued");
       const r = await body();
-      // only the queued job exists → no confirm button anywhere
-      expect(r.text).not.toContain("/confirm");
+      // only the queued job exists → no confirm-button markup on any card
+      // (the string "/confirm" also appears in the upload client script, so
+      // assert on the card's hx-get attribute specifically)
+      expect(r.text).not.toContain('hx-get="/ui/queue/');
     });
 
     test("GET .../confirm renders a swatch + AMS dropdown per filament slot", async () => {
@@ -182,6 +200,24 @@ describe("GET / (dashboard SSR)", () => {
       expect(text).toContain("AMS 4");
       // slot 1's stored mapping (tray index 2 → "AMS 3") is pre-selected
       expect(text).toMatch(/<option value="2" selected>AMS 3<\/option>/);
+    });
+
+    test("handles the uploader's index-based filament shape (not just slot)", async () => {
+      // POST /api/queue stores extractFilaments()'s shape: {index,color,type}
+      const id = repo.createJob({
+        filename: "uploaded.3mf",
+        filaments: [
+          { index: 0, color: "#ff0000", type: "PLA" },
+          { index: 1, color: "#0000ff", type: "PETG" },
+        ],
+      });
+      const res = await app.request(`/ui/queue/${id}/confirm`);
+      const text = await res.text();
+      // index 0/1 must normalize to slot 1/2 (not "undefined")
+      expect(text).toContain('data-slot="1"');
+      expect(text).toContain('data-slot="2"');
+      expect(text).not.toContain("undefined");
+      expect(text).toContain("#ff0000");
     });
 
     test("confirming a non-processing job is refused in the panel", async () => {
