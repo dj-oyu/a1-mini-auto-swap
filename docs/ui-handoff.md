@@ -82,11 +82,9 @@ bun run typecheck
 | PATCH | `/api/projects/:id` | `{ color_consistency_policy: 'strict'|'propagate' }` → 200 |
 | GET | `/api/stocker/status` | `StockerRow` / 404 |
 | POST | `/api/stocker/refill` | 200（残数=capacity、`stocker_refill` pending も解決） |
+| PATCH | `/api/queue/:id/filaments` | `{ ams_mapping:number[4](-1..3), filaments? }` → 200 `JobRow`（processing→queued、`filament_confirm` pending も解決）／ 400 / 404 / **409（processing 以外は確定不可）** |
 
 ### 未実装（spec 8章にあるが未着手＝UI担当が必要に応じて追加）
-
-- `PATCH /api/queue/:id/filaments` — **フィラメント確認・ams_mapping確定**（processing→queued）。
-  UIの肝。まず実装対象。
 - `GET /api/queue/:id/thumbnail`（サムネPNG）/ `GET /api/queue/:id/model`（3Dプレビュー用メッシュ）
   / `GET /api/queue/:id/filaments`。
 - `POST /api/queue/:id/abort`（印刷中止→排出）。

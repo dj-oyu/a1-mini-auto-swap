@@ -255,3 +255,75 @@ describe("DELETE /api/queue/:id", () => {
     }
   });
 });
+
+describe("PATCH /api/queue/:id/filaments (spec ch8)", () => {
+  const patch = (id: number | string, body: unknown) =>
+    app.request(`/api/queue/${id}/filaments`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  test("confirms the plan: sets ams_mapping and moves processing→queued", async () => {
+    const id = repo.createJob({ filename: "p.3mf", filaments: [{ slot: 1, color: "#111" }] });
+    expect(repo.getJob(id)!.status).toBe("processing");
+
+    const res = await patch(id, { ams_mapping: [0, 1, -1, -1] });
+    expect(res.status).toBe(200);
+    const job = (await res.json()) as JobRow;
+    expect(job.status).toBe("queued");
+    expect(JSON.parse(job.ams_mapping!)).toEqual([0, 1, -1, -1]);
+  });
+
+  test("optionally overwrites the filament list; omitting it keeps the stored one", async () => {
+    const id = repo.createJob({ filename: "p.3mf", filaments: [{ slot: 1, color: "#111" }] });
+
+    // omit filaments → unchanged
+    await patch(id, { ams_mapping: [0, -1, -1, -1] });
+    expect(JSON.parse(repo.getJob(id)!.filaments!)).toEqual([{ slot: 1, color: "#111" }]);
+
+    // now edit them (job must be processing again to confirm; simulate a fresh one)
+    const id2 = repo.createJob({ filename: "q.3mf", filaments: [{ slot: 1, color: "#111" }] });
+    await patch(id2, { ams_mapping: [2, -1, -1, -1], filaments: [{ slot: 1, color: "#abc" }] });
+    expect(JSON.parse(repo.getJob(id2)!.filaments!)).toEqual([{ slot: 1, color: "#abc" }]);
+  });
+
+  test("resolves the filament_confirm pending action for the job", async () => {
+    const id = repo.createJob({ filename: "p.3mf" });
+    const pid = repo.createPendingAction({
+      type: "filament_confirm",
+      severity: "advisory",
+      job_id: id,
+    });
+    await patch(id, { ams_mapping: [0, -1, -1, -1] });
+    expect(repo.getUnresolvedPendingActions().some((a) => a.id === pid)).toBe(false);
+  });
+
+  test("409s when the job is not processing (already queued/printing/etc.)", async () => {
+    const id = repo.createJob({ filename: "p.3mf" });
+    repo.updateStatus(id, "queued");
+    const res = await patch(id, { ams_mapping: [0, -1, -1, -1] });
+    expect(res.status).toBe(409);
+    expect(repo.getJob(id)!.status).toBe("queued"); // unchanged
+  });
+
+  test("400s for a malformed ams_mapping", async () => {
+    const id = repo.createJob({ filename: "p.3mf" });
+    for (const bad of [[0, 1, 2], [0, 1, 2, 3, 4], [0, 1, 2, 9], "nope", [0, 1, 2, 1.5]]) {
+      const res = await patch(id, { ams_mapping: bad });
+      expect(res.status).toBe(400);
+    }
+    expect(repo.getJob(id)!.status).toBe("processing"); // still unconfirmed
+  });
+
+  test("400s when filaments is provided but not an array", async () => {
+    const id = repo.createJob({ filename: "p.3mf" });
+    const res = await patch(id, { ams_mapping: [0, -1, -1, -1], filaments: { nope: true } });
+    expect(res.status).toBe(400);
+  });
+
+  test("404s for a missing or invalid id", async () => {
+    expect((await patch(999999, { ams_mapping: [0, -1, -1, -1] })).status).toBe(404);
+    expect((await patch("abc", { ams_mapping: [0, -1, -1, -1] })).status).toBe(404);
+  });
+});
