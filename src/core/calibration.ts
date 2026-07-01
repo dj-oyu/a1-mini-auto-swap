@@ -78,3 +78,58 @@ export class RunTimer {
     this.failed = false;
   }
 }
+
+// ── calibration loop ─────────────────────────────────────────────────────────
+
+export const SWAP_DURATION_KEY = "swap_duration_ms";
+
+/** Runs one dry rehearsal (with/without the appended swap) and returns its
+ *  RUNNING→FINISH ms, or null if the run failed. Production impl dispatches the
+ *  job and times it with RunTimer over the Clock port; tests use a fake. */
+export interface RunMeasurer {
+  measure(withSwap: boolean): Promise<number | null>;
+}
+
+/** Minimal settings persistence the calibration needs. Repo satisfies it. */
+export interface CalibrationStore {
+  getSetting(key: string): string | null;
+  setSetting(key: string, value: string): void;
+}
+
+export interface CalibrationResult {
+  samples: number[];
+  /** the computed value, or null if unusable (setting left unchanged) */
+  updated: number | null;
+  /** the value of system_settings.swap_duration_ms after the run */
+  swapDurationMs: number | null;
+}
+
+/**
+ * Drives the differential calibration (dry-rehearsal §6): for each iteration,
+ * time a no-swap run and a with-swap run, take the difference as a sample, then
+ * aggregate robustly and persist to system_settings.swap_duration_ms — but only
+ * when a usable value results (else keep the existing one; INV-DRY-06).
+ */
+export class CalibrationRunner {
+  constructor(
+    private readonly measurer: RunMeasurer,
+    private readonly store: CalibrationStore,
+    private readonly opts: { madK?: number } = {},
+  ) {}
+
+  async run(iterations: number): Promise<CalibrationResult> {
+    const samples: number[] = [];
+    for (let i = 0; i < iterations; i++) {
+      const base = await this.measurer.measure(false);
+      const swap = await this.measurer.measure(true);
+      if (base != null && swap != null) {
+        samples.push(swapSampleMs({ withSwapMs: swap, withoutSwapMs: base }));
+      }
+    }
+    const updated = calibrateSwapDuration(samples, this.opts);
+    if (updated != null) this.store.setSetting(SWAP_DURATION_KEY, String(updated));
+
+    const persisted = this.store.getSetting(SWAP_DURATION_KEY);
+    return { samples, updated, swapDurationMs: persisted != null ? Number(persisted) : null };
+  }
+}
