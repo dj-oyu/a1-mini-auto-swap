@@ -19,7 +19,16 @@ export class SseBroadcaster implements Notifier {
 
   /** Port method: push the event to every connected client. Never throws. */
   notify(event: NotifyEvent): void {
-    const frame = formatFrame(event);
+    this.broadcast(formatFrame(event));
+  }
+
+  /** Push a live progress frame (`event: progress`) — a non-NotifyEvent payload
+   *  the printing header consumes for a push-based measured ETA (spec 10). */
+  sendProgress(payload: unknown): void {
+    this.broadcast(`event: progress\ndata: ${JSON.stringify(payload)}\n\n`);
+  }
+
+  private broadcast(frame: string): void {
     for (const send of [...this.clients]) {
       try {
         send(frame);

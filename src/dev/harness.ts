@@ -8,7 +8,7 @@ import { createWriteApp } from "../api/write-routes.ts";
 import { createUploadApp } from "../api/upload-routes.ts";
 import { createThumbnailApp } from "../api/thumbnail-routes.ts";
 import { createModelApp } from "../api/model-routes.ts";
-import { createPrinterApp, type PrinterStatusSource } from "../api/printer-routes.ts";
+import { createPrinterApp, printerStatusView, type PrinterStatusSource } from "../api/printer-routes.ts";
 import { createUiApp } from "../api/ui-routes.ts";
 import { createEventsApp } from "../api/events-routes.ts";
 import { SseBroadcaster } from "../orchestrator/sse-notifier.ts";
@@ -61,10 +61,10 @@ app.route("/", createWriteApp({ repo, dispatcher }));
 app.route("/", createUploadApp({ repo, cacheDir }));
 app.route("/", createThumbnailApp({ repo, cacheDir }));
 app.route("/", createModelApp({ repo, cacheDir }));
-// Fake live status so the dev printing header shows a measured ETA without a printer.
-const fakeStatus: PrinterStatusSource = {
-  latest: () => ({ gcodeState: "RUNNING", mcPercent: 42, mcRemainingTime: 73 }),
-};
+// Fake live status so the dev printing header shows a measured ETA without a
+// printer. Mutable so POST /__dev/progress can drive it (deterministic E2E).
+let fake = { gcodeState: "RUNNING", mcPercent: 42, mcRemainingTime: 73 };
+const fakeStatus: PrinterStatusSource = { latest: () => fake };
 app.route("/", createPrinterApp({ repo, status: fakeStatus }));
 app.route("/", createUiApp(repo));
 app.route("/", createEventsApp(sse));
@@ -72,6 +72,20 @@ app.route("/", createEventsApp(sse));
 // Dev-only test hook: reset in-memory state between E2E tests.
 app.post("/__dev/reset", (c) => {
   resetDb(c.req.query("seed") !== "0");
+  return c.json({ ok: true });
+});
+
+// Dev-only test hook: drive the fake live status + push a progress SSE frame
+// (deterministic E2E for the push-based ETA — no timers).
+app.post("/__dev/progress", (c) => {
+  const q = c.req.query();
+  fake = {
+    gcodeState: q.gcode_state ?? "RUNNING",
+    mcPercent: Number(q.percent ?? fake.mcPercent),
+    mcRemainingTime: Number(q.remaining_min ?? fake.mcRemainingTime),
+  };
+  const printing = repo.listByStatus("printing")[0] ?? null;
+  sse.sendProgress(printerStatusView(printing, fake));
   return c.json({ ok: true });
 });
 

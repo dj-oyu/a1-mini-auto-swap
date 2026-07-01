@@ -379,6 +379,13 @@ describe("GET / (dashboard SSR)", () => {
       expect(r.text).toContain("remaining_min");
       expect(r.text).toContain("実測");
     });
+
+    test("the client consumes push-based SSE progress (no 10s polling loop)", async () => {
+      const r = await body();
+      expect(r.text).toContain("es.addEventListener('progress'");
+      // the old fixed 10s poll interval is gone (SSE-driven now)
+      expect(r.text).not.toContain("setInterval(pollStatus, 10000)");
+    });
   });
 
   describe("live updates (MVP #3)", () => {

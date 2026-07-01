@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { Repo } from "../db/repo.ts";
+import type { JobRow } from "../db/types.ts";
 
 /**
  * Live printer status API (spec ch8/10 / spec 17 §7): `GET /api/printer/status`
@@ -30,30 +31,28 @@ export interface PrinterStatusView {
   gcode_state: string;
 }
 
+/** Pure mapper: the currently-printing job + latest live status → the view sent
+ *  over both HTTP (GET /api/printer/status) and SSE (event: progress). */
+export function printerStatusView(printing: JobRow | null, s: LiveStatus | null): PrinterStatusView {
+  if (!printing || !s) {
+    return { printing: false, job_id: null, percent: 0, remaining_min: 0, gcode_state: s?.gcodeState ?? "IDLE" };
+  }
+  return {
+    printing: true,
+    job_id: printing.id,
+    percent: Number.isFinite(s.mcPercent) ? s.mcPercent : 0,
+    remaining_min: Number.isFinite(s.mcRemainingTime) ? s.mcRemainingTime : 0,
+    gcode_state: s.gcodeState,
+  };
+}
+
 export function createPrinterApp(deps: { repo: Repo; status: PrinterStatusSource }): Hono {
   const { repo, status } = deps;
   const app = new Hono();
 
-  app.get("/api/printer/status", (c) => {
-    const printing = repo.listByStatus("printing")[0] ?? null;
-    const s = status.latest();
-    if (!printing || !s) {
-      return c.json<PrinterStatusView>({
-        printing: false,
-        job_id: null,
-        percent: 0,
-        remaining_min: 0,
-        gcode_state: s?.gcodeState ?? "IDLE",
-      });
-    }
-    return c.json<PrinterStatusView>({
-      printing: true,
-      job_id: printing.id,
-      percent: Number.isFinite(s.mcPercent) ? s.mcPercent : 0,
-      remaining_min: Number.isFinite(s.mcRemainingTime) ? s.mcRemainingTime : 0,
-      gcode_state: s.gcodeState,
-    });
-  });
+  app.get("/api/printer/status", (c) =>
+    c.json(printerStatusView(repo.listByStatus("printing")[0] ?? null, status.latest())),
+  );
 
   return app;
 }
