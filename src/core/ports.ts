@@ -3,6 +3,7 @@ import type {
   JobStatus,
   PendingActionRow,
   PendingActionType,
+  ProjectRow,
   Severity,
   StockerRow,
 } from "./types.ts";
@@ -57,8 +58,10 @@ export const systemClock: Clock = { now: () => Date.now() };
  */
 export interface QueueStore {
   getJob(id: number): JobRow | null;
+  getProject(id: number): ProjectRow | null;
   listByStatus(status: JobStatus): JobRow[];
   updateStatus(id: number, status: JobStatus, lastError?: string | null): void;
+  setSubstitution(id: number, slot: number, color: string): void;
   incrementAttempts(id: number): void;
   getStocker(): StockerRow | null;
   decrementStocker(): void;

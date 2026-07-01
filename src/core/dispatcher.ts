@@ -1,5 +1,6 @@
 import type { JobRow } from "./types.ts";
 import type { Notifier, PrinterPort, QueueStore } from "./ports.ts";
+import { resolveColorConsistency } from "./color-policy.ts";
 
 export interface DispatcherOptions {
   /** Max attempts before retry halts and only notifies (spec 18, INV-QUEUE-03). */
@@ -72,12 +73,51 @@ export class Dispatcher {
     return { dispatched: job.id };
   }
 
-  /** Normal completion: success, swap (-1), then auto-advance to the next job. */
+  /** Normal completion: success, swap (-1), color-consistency handling, then
+   *  auto-advance to the next job. */
   async onFinished(jobId: number): Promise<void> {
+    const job = this.repo.getJob(jobId);
     this.repo.updateStatus(jobId, "success");
     this.repo.decrementStocker();
     this.notifier?.notify({ type: "job_finished", jobId }); // spec 15 (INV-NOTIFY-01)
+    if (job) this.applyColorConsistency(job);
     await this.dispatchNext();
+  }
+
+  /** spec 12: if this plate substituted a color, either propagate the substitute
+   *  to the project's remaining plates or block the project for a human decision. */
+  private applyColorConsistency(job: JobRow): void {
+    if (job.substituted_color == null || job.project_id == null) return; // INV-PROJECT-03
+    const project = this.repo.getProject(job.project_id);
+    if (!project) return;
+
+    const decision = resolveColorConsistency(
+      { hasProject: true, policy: project.color_consistency_policy },
+      true,
+    );
+
+    if (decision.kind === "block") {
+      this.repo.createPendingAction({
+        type: "color_decision",
+        severity: "blocking_job",
+        job_id: job.id,
+        project_id: job.project_id,
+        message: `${project.name}: 色が代替されました。続行/待機を選んでください`,
+      });
+      this.notifier?.notify({
+        type: "pending_action",
+        jobId: job.id,
+        projectId: job.project_id,
+        severity: "blocking_job",
+        message: "color_decision",
+      });
+    } else if (decision.kind === "propagate") {
+      for (const q of this.repo.listByStatus("queued")) {
+        if (q.project_id === job.project_id && job.substituted_slot != null) {
+          this.repo.setSubstitution(q.id, job.substituted_slot, job.substituted_color);
+        }
+      }
+    }
   }
 
   /** Abnormal end: fail + safe eject + swap (-1) + human-gated retry_decision. */
