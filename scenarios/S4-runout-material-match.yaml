@@ -1,0 +1,31 @@
+name: "フィラメント切れ（allow_material_match）→ 同タイプ別色へ自動切替、代替色を記録して完走"
+targets:
+  - INV-RUNOUT-04     # 同タイプなら色違いでも切替
+  - INV-RUNOUT-06     # 色が違えば substitution 記録
+
+setup:
+  jobs:
+    - id: plateA
+      est_seconds: 300
+      filaments: [{ slot: 0, color: "#FF0000", type: "PLA" }]
+      ams_mapping: [0, -1, -1, -1]
+  ams:
+    - { slot: 0, color: "#FF0000", type: "PLA", remaining_g: 200 }
+    - { slot: 1, color: "#0000FF", type: "PLA", remaining_g: 800 } # 代替先（同PLA・別色）
+  stocker: { capacity: 10, remaining: 10 }
+  system_settings: { filament_runout_policy: allow_material_match }
+
+steps:
+  - upload: plateA
+  - confirm_filaments: plateA
+  - dispatch_all
+  - wait_until: { job: plateA, state: printing }
+  - control: { POST: /__control/ams/0, body: { remaining_g: 0 } }   # 枯渇 → 自動でスロット1へ
+  - assert: { pending_action: filament_runout, exists: false }       # 自動解決したので pending 無し
+  - assert: { invariant: INV-RUNOUT-06 }                             # substitution 記録済み
+  - finish_current
+  - wait_until: { job: plateA, state: success }
+  - assert: { stocker: { remaining: 9 } }
+
+expect:
+  - INV-RUNOUT-04: "同タイプ別色へ切替できた"

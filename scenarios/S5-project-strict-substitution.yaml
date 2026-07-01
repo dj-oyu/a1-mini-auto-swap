@@ -1,0 +1,47 @@
+name: "strictプロジェクトで代替色が発生 → 完了時に color_decision で停止、無所属ジョブは進む"
+targets:
+  - INV-PROJECT-01    # strict: 代替色→後続を止め color_decision
+  - INV-DISPATCH-01   # 止まったプロジェクト以外は進む
+
+setup:
+  project: { name: "proj", color_consistency_policy: "strict" }
+  jobs:
+    - id: plateA
+      project: "proj"
+      est_seconds: 300
+      filaments: [{ slot: 0, color: "#FF0000", type: "PLA" }]
+      ams_mapping: [0, -1, -1, -1]
+    - id: plateB
+      project: "proj"
+      est_seconds: 300
+      filaments: [{ slot: 0, color: "#FF0000", type: "PLA" }]
+      ams_mapping: [0, -1, -1, -1]
+    - id: plateC          # 無所属：proj が止まっても進むべき
+      est_seconds: 300
+      filaments: [{ slot: 0, color: "#FF0000", type: "PLA" }]
+      ams_mapping: [0, -1, -1, -1]
+  ams:
+    - { slot: 0, color: "#FF0000", type: "PLA", remaining_g: 300 }
+    - { slot: 1, color: "#0000FF", type: "PLA", remaining_g: 800 }
+  stocker: { capacity: 10, remaining: 10 }
+  system_settings: { filament_runout_policy: allow_material_match }
+
+steps:
+  - upload: plateA
+  - upload: plateB
+  - upload: plateC
+  - confirm_filaments: plateA
+  - confirm_filaments: plateB
+  - confirm_filaments: plateC
+  - dispatch_all
+  - wait_until: { job: plateA, state: printing }
+  - control: { POST: /__control/ams/0, body: { remaining_g: 0 } }   # plateA が代替色に
+  - finish_current                                                   # 完了 → strict → color_decision
+  - wait_until: { job: plateA, state: success }
+  - assert: { pending_action: color_decision, exists: true }
+  - wait_until: { job: plateC, state: printing }                     # 無所属は進む
+  - assert: { job: plateB, state: queued }                           # proj は止まったまま
+  - assert: { invariant: INV-PROJECT-01 }
+
+expect:
+  - INV-PROJECT-01: "strict で color_decision が生成され proj が停止"

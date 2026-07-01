@@ -6,6 +6,8 @@ import { Dispatcher } from "../core/dispatcher.ts";
 import type { Notifier, NotifyEvent, PrinterPort } from "../core/ports.ts";
 import { calcEta } from "../core/eta.ts";
 import { amsMatches } from "../core/ams.ts";
+import { FilamentService } from "../core/filament-service.ts";
+import type { AmsTray } from "../core/runout.ts";
 import { VirtualPrinter } from "../stub/virtual-printer.ts";
 import type { Tray } from "../stub/types.ts";
 import type { InvariantResult, Sut } from "./sut.ts";
@@ -92,9 +94,12 @@ export class StubSut implements Sut {
   private dispatcher!: Dispatcher;
   private closeDb: (() => void) | null = null;
 
+  private filamentService!: FilamentService;
   private readonly logicalToDbId = new Map<string, number>();
   private readonly specByDbId = new Map<number, JobSpec>();
+  private readonly projectNameToId = new Map<string, number>();
   private amsConfig: Setup["ams"] = [];
+  private amsState: AmsTray[] = [];
   private readonly confirmedMatch = new Map<number, boolean>();
   private readonly notifier = new RecordingNotifier();
   private initialRemaining = 0;
@@ -116,7 +121,14 @@ export class StubSut implements Sut {
     this.closeDb = close;
     this.repo = new RecordingRepo(db);
     this.amsConfig = setup.ams;
+    this.amsState = setup.ams.map((a) => ({ ...a }));
 
+    if (setup.project) {
+      this.projectNameToId.set(
+        setup.project.name,
+        this.repo.createProject(setup.project.name, setup.project.color_consistency_policy),
+      );
+    }
     if (setup.stocker) {
       this.repo.setStocker(setup.stocker.capacity, setup.stocker.remaining);
       this.initialRemaining = setup.stocker.remaining;
@@ -128,6 +140,12 @@ export class StubSut implements Sut {
       return spec?.ams_mapping ?? [-1, -1, -1, -1];
     });
     this.dispatcher = new Dispatcher(this.repo, this.printerPort, { notifier: this.notifier });
+    this.filamentService = new FilamentService(
+      this.repo,
+      { getTrays: () => this.amsState },
+      this.printerPort,
+      { minThresholdG: 10, notifier: this.notifier },
+    );
 
     // stash job specs by logical id for upload()
     this.pendingSpecs = new Map(setup.jobs.map((j) => [j.id, j]));
@@ -145,6 +163,7 @@ export class StubSut implements Sut {
     if (!spec) throw new Error(`scenario has no job spec for '${logicalId}'`);
     const dbId = this.repo.createJob({
       filename: logicalId,
+      project_id: spec.project ? (this.projectNameToId.get(spec.project) ?? null) : null,
       estimated_seconds: spec.est_seconds ?? null,
       filaments: spec.filaments,
       ams_mapping: spec.ams_mapping,
@@ -180,12 +199,36 @@ export class StubSut implements Sut {
     const b = (body ?? {}) as Record<string, unknown>;
     const amsSlot = path.match(/\/__control\/ams\/(\d+)/);
     if (amsSlot) {
-      this.printer.setAms(Number(amsSlot[1]), b as never);
+      const slot = Number(amsSlot[1]);
+      this.applyAmsPatch(slot, b);
+      this.printer.setAms(slot, b as never);
+      // A slot emptied during a print => runout: the orchestrator (here, the
+      // monitor stand-in) invokes the FilamentService (spec 14).
+      if (b.remaining_g === 0) {
+        const printing = this.repo.listByStatus("printing")[0];
+        if (printing) await this.filamentService.onRunout(printing.id, slot);
+      }
     } else if (path.endsWith("/finish")) {
       this.printer.forceFinish();
     } else if (path.endsWith("/fault")) {
       this.printer.injectFault(b as never);
+      // A fault that fails the print => monitor routes it to onFailed.
+      if (this.printer.state === "FAILED") {
+        const printing = this.repo.listByStatus("printing")[0];
+        if (printing) await this.dispatcher.onFailed(printing.id, `fault:${String(b.category)}`);
+      }
     }
+  }
+
+  private applyAmsPatch(slot: number, b: Record<string, unknown>): void {
+    const tray = this.amsState.find((t) => t.slot === slot);
+    const patch = {
+      ...(typeof b.color === "string" ? { color: b.color } : {}),
+      ...(typeof b.type === "string" ? { type: b.type } : {}),
+      ...(typeof b.remaining_g === "number" ? { remaining_g: b.remaining_g } : {}),
+    };
+    if (tray) Object.assign(tray, patch);
+    else this.amsState.push({ slot, color: "", type: "", remaining_g: 0, ...patch });
   }
 
   async resolvePending(type: string): Promise<void> {
@@ -264,6 +307,59 @@ export class StubSut implements Sut {
       case "INV-ETA-02":
       case "INV-ETA-03":
         return this.checkEta(id);
+
+      // ── Phase 5 (異常系) ──
+      case "INV-RUNOUT-01": {
+        // manual runout => filament_runout pending AND no auto-substitution
+        const pending = this.pendingExists("filament_runout");
+        const substituted = this.allJobs().some((j) => j.substituted_color != null);
+        return pending && !substituted
+          ? { ok: true }
+          : { ok: false, detail: `pending=${pending} substituted=${substituted}` };
+      }
+      case "INV-RUNOUT-05":
+        return this.pendingExists("filament_runout")
+          ? { ok: true }
+          : { ok: false, detail: "no filament_runout pending" };
+      case "INV-RUNOUT-04":
+      case "INV-RUNOUT-06": {
+        // an auto-switch recorded a color substitution
+        return this.allJobs().some((j) => j.substituted_color != null)
+          ? { ok: true }
+          : { ok: false, detail: "no substitution recorded" };
+      }
+      case "INV-PROJECT-01":
+        return this.pendingExists("color_decision")
+          ? { ok: true }
+          : { ok: false, detail: "no color_decision pending" };
+      case "INV-PROJECT-02": {
+        const finished = this.allJobs().find(
+          (j) => j.status === "success" && j.substituted_color != null && j.project_id != null,
+        );
+        if (!finished) return { ok: false, detail: "no finished substituted project plate" };
+        const others = this.allJobs().filter(
+          (j) => j.project_id === finished.project_id && j.id !== finished.id,
+        );
+        return others.length > 0 && others.every((j) => j.substituted_color != null)
+          ? { ok: true }
+          : { ok: false, detail: "remaining project plates not all substituted" };
+      }
+      case "INV-FAIL-01": {
+        const failed = this.allJobs().some((j) => j.status === "failed");
+        return failed && this.pendingExists("retry_decision")
+          ? { ok: true }
+          : { ok: false, detail: `failed=${failed} retry_decision=${this.pendingExists("retry_decision")}` };
+      }
+      case "INV-STOCKER-04": {
+        const refill = this.repo
+          .getUnresolvedPendingActions()
+          .some((a) => a.type === "stocker_refill" && a.severity === "blocking_queue");
+        const idle = this.repo.listByStatus("printing").length === 0;
+        return refill && idle
+          ? { ok: true }
+          : { ok: false, detail: `stocker_refill=${refill} printing_idle=${idle}` };
+      }
+
       default:
         // Fail loudly rather than silently pass — an unmechanized invariant
         // assert must drive mechanization, not false-green (no gaming).
@@ -299,6 +395,14 @@ export class StubSut implements Sut {
     return eta.projectEta === expected
       ? { ok: true }
       : { ok: false, detail: `projectEta ${eta.projectEta} != ${expected}` };
+  }
+
+  private allJobs() {
+    return [...this.logicalToDbId.values()].map((id) => this.repo.getJob(id)!);
+  }
+
+  private pendingExists(type: string): boolean {
+    return this.repo.getUnresolvedPendingActions().some((a) => a.type === type);
   }
 
   private dbId(logicalId: string): number {

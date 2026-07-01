@@ -1,0 +1,27 @@
+name: "ストッカー空 → stocker_refill(blocking_queue)でキュー停止、補充で再開"
+targets:
+  - INV-STOCKER-04    # 残数0でディスパッチ→pending、印刷させない
+
+setup:
+  jobs:
+    - id: plateA
+      est_seconds: 300
+      filaments: [{ slot: 0, color: "#FF0000", type: "PLA" }]
+      ams_mapping: [0, -1, -1, -1]
+  ams:
+    - { slot: 0, color: "#FF0000", type: "PLA", remaining_g: 800 }
+  stocker: { capacity: 5, remaining: 0 }   # 空
+  system_settings: { filament_runout_policy: manual }
+
+steps:
+  - upload: plateA
+  - confirm_filaments: plateA
+  - dispatch_all
+  - assert: { pending_action: stocker_refill, exists: true }
+  - assert: { printing_count: 0 }
+  - assert: { job: plateA, state: queued }
+  - assert: { invariant: INV-STOCKER-04 }     # 空フェーズ中に評価
+  - refill_stocker
+  - resolve_pending: { type: stocker_refill }
+  - dispatch_all
+  - wait_until: { job: plateA, state: printing }   # 補充後は進む

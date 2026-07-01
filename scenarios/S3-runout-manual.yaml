@@ -1,0 +1,27 @@
+name: "印刷中にフィラメント切れ（manualポリシー）→ filament_runout の対応待ちを生む"
+targets:
+  - INV-RUNOUT-01     # manual は必ず pending、自動切替しない
+
+setup:
+  jobs:
+    - id: plateA
+      est_seconds: 300
+      filaments: [{ slot: 0, color: "#FF0000", type: "PLA" }]
+      ams_mapping: [0, -1, -1, -1]
+  ams:
+    - { slot: 0, color: "#FF0000", type: "PLA", remaining_g: 200 }
+    - { slot: 1, color: "#0000FF", type: "PLA", remaining_g: 800 } # 同タイプ別色だが manual なので使わない
+  stocker: { capacity: 10, remaining: 10 }
+  system_settings: { filament_runout_policy: manual }
+
+steps:
+  - upload: plateA
+  - confirm_filaments: plateA
+  - dispatch_all
+  - wait_until: { job: plateA, state: printing }
+  - control: { POST: /__control/ams/0, body: { remaining_g: 0 } }   # スロット0が枯渇
+  - assert: { pending_action: filament_runout, exists: true }        # manual → 人間待ち
+  - assert: { invariant: INV-RUNOUT-01 }
+
+expect:
+  - INV-RUNOUT-01: "manual なので自動切替せず filament_runout pending"

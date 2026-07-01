@@ -1,0 +1,46 @@
+name: "propagateプロジェクトで代替色 → 後続プレートに代替色を適用して止まらず続行"
+targets:
+  - INV-PROJECT-02    # propagate: 残りプレートへ代替色を適用
+
+setup:
+  project: { name: "proj", color_consistency_policy: "propagate" }
+  jobs:
+    - id: plateA
+      project: "proj"
+      est_seconds: 300
+      filaments: [{ slot: 0, color: "#FF0000", type: "PLA" }]
+      ams_mapping: [0, -1, -1, -1]
+    - id: plateB
+      project: "proj"
+      est_seconds: 300
+      filaments: [{ slot: 0, color: "#FF0000", type: "PLA" }]
+      ams_mapping: [0, -1, -1, -1]
+    - id: plateC
+      project: "proj"
+      est_seconds: 300
+      filaments: [{ slot: 0, color: "#FF0000", type: "PLA" }]
+      ams_mapping: [0, -1, -1, -1]
+  ams:
+    - { slot: 0, color: "#FF0000", type: "PLA", remaining_g: 300 }
+    - { slot: 1, color: "#0000FF", type: "PLA", remaining_g: 800 }
+  stocker: { capacity: 10, remaining: 10 }
+  system_settings: { filament_runout_policy: allow_material_match }
+
+steps:
+  - upload: plateA
+  - upload: plateB
+  - upload: plateC
+  - confirm_filaments: plateA
+  - confirm_filaments: plateB
+  - confirm_filaments: plateC
+  - dispatch_all
+  - wait_until: { job: plateA, state: printing }
+  - control: { POST: /__control/ams/0, body: { remaining_g: 0 } }   # plateA が代替色に
+  - finish_current
+  - wait_until: { job: plateA, state: success }
+  - assert: { pending_action: color_decision, exists: false }        # propagate は止めない
+  - assert: { invariant: INV-PROJECT-02 }                            # 残りに代替色が伝播
+  - wait_until: { job: plateB, state: printing }                     # そのまま次へ
+
+expect:
+  - INV-PROJECT-02: "残りの proj プレートに代替色が適用された"

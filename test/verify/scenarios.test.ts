@@ -26,4 +26,21 @@ describe("scenarios end-to-end (Phase 3 完了条件)", () => {
     expect(r.ok).toBe(true);
     expect(r.expects.every((e) => e.ok)).toBe(true);
   });
+
+  // Phase 5 (異常系)
+  for (const file of [
+    "S3-runout-manual.yaml",
+    "S4-runout-material-match.yaml",
+    "S5-project-strict-substitution.yaml",
+    "S6-project-propagate-substitution.yaml",
+    "S7-print-failure.yaml",
+    "S8-stocker-empty.yaml",
+  ]) {
+    test(`${file} runs green end-to-end`, async () => {
+      const r = await run(file);
+      if (!r.ok) console.error(`${file} failure:`, r.failure, r.steps.filter((s) => !s.ok));
+      expect(r.ok).toBe(true);
+      expect(r.expects.every((e) => e.ok)).toBe(true);
+    });
+  }
 });
