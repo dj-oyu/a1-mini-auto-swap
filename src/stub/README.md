@@ -75,9 +75,18 @@ bun test test/stub    # スタブのみ
 | GET  | `/api/diagnostics` | — | 疎通スナップショット（spec 20.7） |
 | GET  | `/api/printer/snapshot` | — | 固定 PNG |
 
+## implicit FTPS（990）— 実装済み（Phase 2）
+
+`ftps-server.ts`（`StubFtpsServer`）。`main.ts` が起動し `diagnostics.ftps_reachable` に反映。
+
+- implicit TLS（接続直後にハンドシェイク）、USER `bblp` + PASS=アクセスコード、STOR は
+  `uploadDir` に basename サニタイズで保存（トラバーサル不可）、4GiB 上限。
+- **PROT P / PROT C 両方を受理**（PROT C = A1 フォールバック、spec 20.6、bambuddy とは逆）。
+- データチャネルは `tls.createServer`（TLS対応クライアントは制御セッションを再利用してデータ側も
+  TLS化するため）。真の平文 PROT C の再現は sniff ベースの将来課題。
+- 990 は特権ポート。非rootのdev機では `STUB_FTPS_PORT` を >1024 に。
+
 ## 未実装（次の増分）
 
-- **implicit FTPS（990）** … `diagnostics.ftps_reachable` は現在 `false` 固定。
-  ディスパッチ（⑥）の「FTPS送信→MQTT印刷開始」を通すため Phase 2 で追加。
 - 実機トピック/ペイロード名の突き合わせ（`topics.ts` / `types.ts` を実機ログで確定）。
 - `pause`/`resume`/`gcode_line`、HMS一時停止からの別スロット再開（spec 14/16、Phase 5）。

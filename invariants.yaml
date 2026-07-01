@@ -192,6 +192,43 @@ invariants:
     check: "filaments/ams_mapping for a job are derived from the just-uploaded archive's project_settings.config, not a prior cache"
     layer: machine
 
+  # ── FTPS（implicit 990）：spec 20.6, docs/bambu-protocol-notes.md ─
+  - id: INV-FTPS-01
+    spec: "20.2, 20.6"
+    desc: "implicit FTPS：接続直後にTLSハンドシェイクが成立する（AUTH TLS不要）"
+    check: "TCP connect on the FTPS port yields an immediate TLS handshake and a 2xx greeting"
+    layer: machine
+
+  - id: INV-FTPS-02
+    spec: "20.6"
+    desc: "認証：USER bblp かつ PASS==アクセスコードで 230、誤コードは拒否"
+    check: "USER 'bblp' + PASS==accessCode => 230; wrong PASS => login rejected (non-2xx)"
+    layer: machine
+
+  - id: INV-FTPS-03
+    spec: "20.6, 7"
+    desc: "STOR：uploadDir に basename でサニタイズして保存（ディレクトリトラバーサル不可）"
+    check: "STOR of '../../evil/x' writes basename('x') into uploadDir with byte-identical content"
+    layer: machine
+
+  - id: INV-FTPS-04
+    spec: "20.6"
+    desc: "PROT P を受理する（200 Private）"
+    check: "PROT P => 200"
+    layer: machine
+
+  - id: INV-FTPS-05
+    spec: "20.6"
+    desc: "★A1差異：PROT C も受理し、後続の転送が成立する（bambuddy の 536 拒否と逆）"
+    check: "PROT C => 200 AND a subsequent STOR still completes"
+    layer: machine
+
+  - id: INV-FTPS-06
+    spec: "20.6, 20.8"
+    desc: "大きめファイル（>64KiB）も分割転送で完全一致で保存される"
+    check: "STOR of a >64KiB payload is stored byte-for-byte"
+    layer: machine
+
   # ── MQTT通信仕様：spec 9章 ────────────────────────────────────────
   - id: INV-MQTT-01
     spec: "9"

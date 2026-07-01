@@ -84,7 +84,21 @@ test("USER bblp + correct access code authenticates (table row: PASS == LAN acce
 test("USER bblp + wrong access code is rejected", async () => {
   await withServer(async (port, client) => {
     await client.connectImplicitTLS("127.0.0.1", port, { rejectUnauthorized: false });
-    await expect(client.login("bblp", "totally-wrong-code")).rejects.toThrow();
+    // NB: use try/catch, not `expect(...).rejects.toThrow()`. Under `bun test`
+    // that matcher hangs against basic-ftp's login rejection (a Bun+basic-ftp
+    // interaction — verified: the identical flow rejects in ~1ms with try/catch
+    // and standalone). The behavior under test (wrong code => rejected) is the
+    // same; only the assertion style changed.
+    let rejected = false;
+    let message = "";
+    try {
+      await client.login("bblp", "totally-wrong-code");
+    } catch (e) {
+      rejected = true;
+      message = (e as Error).message;
+    }
+    expect(rejected).toBe(true);
+    expect(message).toContain("530"); // Login incorrect
   });
 });
 

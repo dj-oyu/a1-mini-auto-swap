@@ -10,8 +10,9 @@ CI（`bun run test:ci` = `bun test test/stub`）はこのディレクトリを**
 
 ## 現在の RED
 
-- `ftps-server.test.ts` — **Phase 2: implicit FTPS（990）**。`src/stub/ftps-server.ts` は
-  現在スケルトン（`throw "not implemented: Phase 2 FTPS"`）。仕様は
-  `docs/bambu-protocol-notes.md` の FTPS 表（TLS1.2 固定、`bblp`+アクセスコード、
-  STOR、**PROT C 受理＝A1 フォールバック**）。実装してこの 7 テストを緑にしたら
-  `test/stub/` へ移す。
+（なし）
+
+- Phase 2 implicit FTPS は **実装完了**。緑になったので `test/stub/ftps-server.test.ts`
+  へ移動済み（CI 対象）。
+
+次フェーズの RED テストをここに置く運用は継続する。
