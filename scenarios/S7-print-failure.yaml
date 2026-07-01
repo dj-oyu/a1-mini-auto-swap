@@ -1,0 +1,31 @@
+name: "印刷失敗（プリンター故障）→ 自動中止＋排出、retry_decision を生み自動リトライしない"
+targets:
+  - INV-FAIL-01       # 失敗→排出→swap→retry_decision
+  - INV-QUEUE-02      # 自動retryしない
+
+setup:
+  jobs:
+    - id: plateA
+      est_seconds: 300
+      filaments: [{ slot: 0, color: "#FF0000", type: "PLA" }]
+      ams_mapping: [0, -1, -1, -1]
+  ams:
+    - { slot: 0, color: "#FF0000", type: "PLA", remaining_g: 800 }
+  stocker: { capacity: 10, remaining: 10 }
+  system_settings: { filament_runout_policy: manual }
+
+steps:
+  - upload: plateA
+  - confirm_filaments: plateA
+  - dispatch_all
+  - wait_until: { job: plateA, state: printing }
+  - control: { POST: /__control/fault, body: { category: "printer", timing: "now" } }
+  - wait_until: { job: plateA, state: failed }
+  - assert: { pending_action: retry_decision, exists: true }
+  - assert: { stocker: { remaining: 9 } }        # 強制排出の swap
+  - assert: { invariant: INV-FAIL-01 }
+  # 自動リトライしない：失敗後に何もしなければ printing は 0 のまま
+  - assert: { printing_count: 0 }
+
+expect:
+  - INV-FAIL-01: "failed + retry_decision + swap"
