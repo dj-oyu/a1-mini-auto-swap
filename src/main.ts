@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { openDb } from "./db/index.ts";
 import { createApiApp } from "./api/routes.ts";
 import { createWriteApp } from "./api/write-routes.ts";
+import { createUploadApp } from "./api/upload-routes.ts";
 import { OrchestratorMqttClient } from "./orchestrator/mqtt-client.ts";
 import { MqttFtpsPrinter, type ArtifactResolver } from "./orchestrator/mqtt-ftps-printer.ts";
 import { PrintfarmGateway, MqttPublisherClient } from "./orchestrator/gateway.ts";
@@ -82,6 +83,7 @@ const orch = createOrchestrator({ repo, printer, notifier, gateway, status: mqtt
 const app = new Hono();
 app.route("/", createApiApp(repo));
 app.route("/", createWriteApp({ repo, dispatcher: orch.dispatcher }));
+app.route("/", createUploadApp({ repo, cacheDir: CACHE_DIR })); // POST /api/queue → cache 3mf
 
 const server = Bun.serve({ port: HTTP_PORT, fetch: app.fetch });
 console.log(`orchestrator up`);
