@@ -6,9 +6,10 @@
   "description": "Bambu A1 mini multi-plate auto-print orchestrator + printer-stub (self-hosted controller host, no-cloud)",
   "scripts": {
     "start": "bun run src/main.ts",
+    "dev:ui": "bun run src/dev/harness.ts",
     "stub": "bun run src/stub/main.ts",
     "test": "bun test",
-    "test:ci": "bun test test/stub test/verify test/db test/orchestrator test/core test/injection test/api",
+    "test:ci": "bun test test/stub test/verify test/db test/orchestrator test/core test/injection test/api test/dev",
     "test:stub": "bun test test/stub",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
