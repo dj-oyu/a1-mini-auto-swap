@@ -96,6 +96,21 @@ export class Repo implements QueueStore {
       .query("UPDATE jobs SET substituted_slot=?, substituted_color=?, updated_at=datetime('now') WHERE id=?")
       .run(slot, color, id);
   }
+  // spec ch8: confirm/adjust the filament plan (PATCH /api/queue/:id/filaments).
+  // Sets the AMS mapping (and optionally an edited filament list) without
+  // changing status — the caller transitions processing→queued. A null
+  // filaments arg leaves the stored list untouched (COALESCE).
+  setFilamentPlan(id: number, amsMapping: number[], filaments?: unknown): void {
+    this.db
+      .query(
+        `UPDATE jobs SET ams_mapping=?, filaments=COALESCE(?, filaments), updated_at=datetime('now') WHERE id=?`,
+      )
+      .run(
+        JSON.stringify(amsMapping),
+        filaments != null ? JSON.stringify(filaments) : null,
+        id,
+      );
+  }
   // spec ch8: write endpoint for DELETE /api/queue/:id (remove a non-active job).
   deleteJob(id: number): void {
     this.db.query("DELETE FROM jobs WHERE id=?").run(id);

@@ -7,6 +7,16 @@ function isValidPolicy(v: unknown): v is ColorConsistencyPolicy {
   return v === "strict" || v === "propagate";
 }
 
+/** An AMS mapping is a 4-element array (one entry per print slot) whose values
+ *  are tray indices 0–3, or -1 for "unused" (spec ch8/14). */
+function isValidAmsMapping(v: unknown): v is number[] {
+  return (
+    Array.isArray(v) &&
+    v.length === 4 &&
+    v.every((n) => Number.isInteger(n) && n >= -1 && n <= 3)
+  );
+}
+
 /** Parse a route `:id` param the same way the read routes do (spec ch8):
  *  non-positive-integer ids are treated as "not found" rather than a 400,
  *  since they can never address a real row. */
@@ -79,6 +89,38 @@ export function createWriteApp(deps: { repo: Repo; dispatcher: Dispatcher }): Ho
       if (action.type === "stocker_refill") repo.resolvePendingAction(action.id);
     }
     return c.json(repo.getStocker());
+  });
+
+  // PATCH /api/queue/:id/filaments — spec ch8: confirm the filament plan for a
+  // processing job (the upload confirm step, spec 17 §6). Sets the AMS mapping
+  // (+ optional edited filament list), resolves the filament_confirm pending,
+  // and transitions processing→queued. Only valid while the job is 'processing'.
+  app.patch("/api/queue/:id/filaments", async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) return c.json({ error: "invalid job id" }, 404);
+    const job = repo.getJob(id);
+    if (!job) return c.json({ error: "job not found" }, 404);
+    if (job.status !== "processing") {
+      return c.json({ error: "filaments can only be confirmed while processing" }, 409);
+    }
+
+    const body = (await c.req.json().catch(() => ({}))) as {
+      ams_mapping?: unknown;
+      filaments?: unknown;
+    };
+    if (!isValidAmsMapping(body.ams_mapping)) {
+      return c.json({ error: "ams_mapping must be a 4-element array of -1..3" }, 400);
+    }
+    if (body.filaments !== undefined && !Array.isArray(body.filaments)) {
+      return c.json({ error: "filaments must be an array when provided" }, 400);
+    }
+
+    repo.setFilamentPlan(id, body.ams_mapping, body.filaments);
+    await dispatcher.enqueue(id); // processing → queued (spec ch6)
+    for (const a of repo.getUnresolvedPendingActions()) {
+      if (a.type === "filament_confirm" && a.job_id === id) repo.resolvePendingAction(a.id);
+    }
+    return c.json(repo.getJob(id));
   });
 
   // POST /api/queue/:id/retry — spec ch8/18: human-triggered retry.
