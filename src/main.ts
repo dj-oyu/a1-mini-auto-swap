@@ -6,6 +6,7 @@ import { createApiApp } from "./api/routes.ts";
 import { createWriteApp } from "./api/write-routes.ts";
 import { createUploadApp } from "./api/upload-routes.ts";
 import { createThumbnailApp } from "./api/thumbnail-routes.ts";
+import { createModelApp } from "./api/model-routes.ts";
 import { createUiApp } from "./api/ui-routes.ts";
 import { createEventsApp } from "./api/events-routes.ts";
 import { SseBroadcaster } from "./orchestrator/sse-notifier.ts";
@@ -90,6 +91,7 @@ app.route("/", createApiApp(repo));
 app.route("/", createWriteApp({ repo, dispatcher: orch.dispatcher }));
 app.route("/", createUploadApp({ repo, cacheDir: CACHE_DIR })); // POST /api/queue → cache 3mf
 app.route("/", createThumbnailApp({ repo, cacheDir: CACHE_DIR })); // GET …/thumbnail (spec 17 §6)
+app.route("/", createModelApp({ repo, cacheDir: CACHE_DIR })); // GET …/model (spec 17 §9)
 app.route("/", createUiApp(repo)); // GET / → server-rendered dashboard (spec 17)
 app.route("/", createEventsApp(sse)); // GET /events → SSE live updates (spec 17)
 
