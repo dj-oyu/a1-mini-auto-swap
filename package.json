@@ -7,7 +7,7 @@
   "scripts": {
     "stub": "bun run src/stub/main.ts",
     "test": "bun test",
-    "test:ci": "bun test test/stub test/verify test/db test/orchestrator",
+    "test:ci": "bun test test/stub test/verify test/db test/orchestrator test/core",
     "test:stub": "bun test test/stub",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
