@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { openDb, type Db } from "../../src/db/index.ts";
-import { Dispatcher } from "../../src/orchestrator/dispatcher.ts";
-import type { PrinterPort } from "../../src/orchestrator/printer-port.ts";
+import { Dispatcher } from "../../src/core/dispatcher.ts";
+import type { PrinterPort } from "../../src/core/ports.ts";
 import type { JobRow } from "../../src/db/types.ts";
 
 class FakePrinter implements PrinterPort {

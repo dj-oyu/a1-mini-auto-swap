@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { calcEta } from "../../src/orchestrator/eta.ts";
+import { calcEta } from "../../src/core/eta.ts";
 
 const NOW = 1_700_000_000_000;
 const SWAP = 90_000; // 90s

@@ -2,9 +2,10 @@ import { openDb } from "../db/index.ts";
 import { Repo } from "../db/repo.ts";
 import type { Database } from "bun:sqlite";
 import type { JobRow, JobStatus } from "../db/types.ts";
-import { Dispatcher } from "../orchestrator/dispatcher.ts";
-import type { PrinterPort } from "../orchestrator/printer-port.ts";
-import { calcEta } from "../orchestrator/eta.ts";
+import { Dispatcher } from "../core/dispatcher.ts";
+import type { Notifier, NotifyEvent, PrinterPort } from "../core/ports.ts";
+import { calcEta } from "../core/eta.ts";
+import { amsMatches } from "../core/ams.ts";
 import { VirtualPrinter } from "../stub/virtual-printer.ts";
 import type { Tray } from "../stub/types.ts";
 import type { InvariantResult, Sut } from "./sut.ts";
@@ -67,6 +68,14 @@ class StubDirectPrinter implements PrinterPort {
   }
 }
 
+/** Notifier adapter that records events for invariant checks (INV-NOTIFY-01). */
+class RecordingNotifier implements Notifier {
+  readonly events: NotifyEvent[] = [];
+  notify(e: NotifyEvent): void {
+    this.events.push(e);
+  }
+}
+
 /**
  * Concrete Sut wiring DB + dispatcher + a VirtualPrinter for the scenario
  * runner. Drives the real orchestrator decision logic (Dispatcher over Repo)
@@ -84,7 +93,7 @@ export class StubSut implements Sut {
   private readonly specByDbId = new Map<number, JobSpec>();
   private amsConfig: Setup["ams"] = [];
   private readonly confirmedMatch = new Map<number, boolean>();
-  private readonly notifications: Array<{ type: string; jobId: number }> = [];
+  private readonly notifier = new RecordingNotifier();
   private initialRemaining = 0;
   private completions = 0;
 
@@ -115,7 +124,7 @@ export class StubSut implements Sut {
       const spec = this.specByDbId.get(jobId);
       return spec?.ams_mapping ?? [-1, -1, -1, -1];
     });
-    this.dispatcher = new Dispatcher(this.repo, this.printerPort);
+    this.dispatcher = new Dispatcher(this.repo, this.printerPort, { notifier: this.notifier });
 
     // stash job specs by logical id for upload()
     this.pendingSpecs = new Map(setup.jobs.map((j) => [j.id, j]));
@@ -144,7 +153,7 @@ export class StubSut implements Sut {
   async confirmFilaments(logicalId: string): Promise<void> {
     const dbId = this.dbId(logicalId);
     const spec = this.specByDbId.get(dbId)!;
-    const matched = this.amsMatches(spec);
+    const matched = amsMatches(spec.filaments ?? [], this.amsConfig);
     this.confirmedMatch.set(dbId, matched);
     if (matched) {
       // exact match => advisory auto-queue, no blocking pending (INV-PENDING-01)
@@ -191,9 +200,8 @@ export class StubSut implements Sut {
     const printing = this.repo.listByStatus("printing")[0];
     if (!printing) return;
     this.printer.forceFinish();
-    await this.dispatcher.onFinished(printing.id);
+    await this.dispatcher.onFinished(printing.id); // dispatcher emits job_finished via notifier
     this.completions++;
-    this.notifications.push({ type: "job_finished", jobId: printing.id }); // spec 15 (INV-NOTIFY-01)
   }
 
   // ── queries ─────────────────────────────────────────────────────────────────
@@ -240,7 +248,7 @@ export class StubSut implements Sut {
         return bad ? { ok: false, detail: `illegal transition ${bad.from}->${bad.to}` } : { ok: true };
       }
       case "INV-NOTIFY-01": {
-        const finishNotes = this.notifications.filter((n) => n.type === "job_finished").length;
+        const finishNotes = this.notifier.events.filter((n) => n.type === "job_finished").length;
         return finishNotes === this.completions
           ? { ok: true }
           : { ok: false, detail: `${finishNotes} finish notifications for ${this.completions} completions` };
@@ -288,13 +296,6 @@ export class StubSut implements Sut {
     return eta.projectEta === expected
       ? { ok: true }
       : { ok: false, detail: `projectEta ${eta.projectEta} != ${expected}` };
-  }
-
-  private amsMatches(spec: JobSpec): boolean {
-    const fils = spec.filaments ?? [];
-    return fils.every((f) =>
-      this.amsConfig.some((a) => a.slot === f.slot && a.color === f.color && a.type === f.type),
-    );
   }
 
   private dbId(logicalId: string): number {
