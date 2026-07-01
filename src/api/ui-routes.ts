@@ -3,7 +3,15 @@ import { serveStatic } from "hono/bun";
 import { html, raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
 import type { Repo } from "../db/repo.ts";
-import type { JobRow, JobStatus, PendingActionRow, Severity, StockerRow } from "../db/types.ts";
+import type {
+  ColorConsistencyPolicy,
+  JobRow,
+  JobStatus,
+  PendingActionRow,
+  ProjectRow,
+  Severity,
+  StockerRow,
+} from "../db/types.ts";
 
 // `html` yields a Promise when any interpolation (e.g. an array of fragments) is
 // async, so fragment helpers return the union rather than the bare string.
@@ -41,6 +49,29 @@ export function createUiApp(repo: Repo): Hono {
   // GET /ui/dashboard — the reactive #dashboard fragment on its own, so the SSE
   // client (and htmx) can re-fetch it on any event without a full page reload.
   app.get("/ui/dashboard", (c) => c.html(renderDashboardInner(snapshot())));
+
+  // GET /projects — the projects page (spec 17: policy + 所属プレート progress).
+  app.get("/projects", (c) => c.html(renderProjectsPage(repo)));
+  app.get("/ui/projects", (c) => c.html(renderProjectsInner(repo)));
+
+  // POST /ui/projects — create a project; returns the refreshed #projects fragment.
+  app.post("/ui/projects", async (c) => {
+    const body = await c.req.parseBody();
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    const policy = isPolicy(body.policy) ? body.policy : "strict";
+    if (name) repo.createProject(name, policy);
+    return c.html(renderProjectsInner(repo));
+  });
+
+  // POST /ui/projects/:id/policy — toggle color-consistency policy (htmx).
+  app.post("/ui/projects/:id/policy", async (c) => {
+    const id = Number(c.req.param("id"));
+    const body = await c.req.parseBody();
+    if (Number.isInteger(id) && id > 0 && repo.getProject(id) && isPolicy(body.policy)) {
+      repo.setProjectPolicy(id, body.policy);
+    }
+    return c.html(renderProjectsInner(repo));
+  });
 
   // GET /ui/queue/:id/confirm — the filament-confirm modal for a processing job
   // (spec 17 §6). Loaded into #modal by htmx; submits via PATCH (client-side).
@@ -415,6 +446,98 @@ function renderDashboardInner(data: DashboardData): Html {
   </div>`;
 }
 
+// ── projects page ─────────────────────────────────────────────────────────────
+
+function isPolicy(v: unknown): v is ColorConsistencyPolicy {
+  return v === "strict" || v === "propagate";
+}
+
+const POLICY_LABEL: Record<ColorConsistencyPolicy, string> = {
+  strict: "厳密（色を固定）",
+  propagate: "伝播（代替色を継承）",
+};
+
+const ACTIVE_STATUSES: JobStatus[] = ["processing", "queued", "printing", "waiting_for_refill"];
+
+/** Top navigation shared by the dashboard and the projects page. */
+function nav(active: "queue" | "projects"): Html {
+  const cls = (k: string) => (k === active ? "navlink active" : "navlink");
+  return html`<nav class="nav">
+    <a class="${cls("queue")}" href="/">キュー</a>
+    <a class="${cls("projects")}" href="/projects">プロジェクト</a>
+  </nav>`;
+}
+
+function projectCard(project: ProjectRow, jobs: JobRow[]): Html {
+  const mine = jobs.filter((j) => j.project_id === project.id);
+  const total = mine.length;
+  const done = mine.filter((j) => j.status === "success").length;
+  const active = mine.filter((j) => ACTIVE_STATUSES.includes(j.status));
+  const remainingSec = active.reduce((s, j) => s + (j.estimated_seconds ?? 0), 0);
+  const substituted = mine.some((j) => j.substituted_color != null);
+  const opt = (p: ColorConsistencyPolicy) =>
+    html`<option value="${p}" ${p === project.color_consistency_policy ? "selected" : ""}>${POLICY_LABEL[p]}</option>`;
+  return html`
+    <li class="card proj-card" data-project-id="${project.id}">
+      <div class="card-main">
+        <div class="card-title">
+          <span class="filename">${project.name}</span>
+          ${substituted ? html`<span class="subst" title="一部プレートで色が代替されました">⚠ 色代替</span>` : ""}
+        </div>
+        <div class="card-sub">
+          <span>${total} プレート</span>
+          <span>完了 ${done}/${total}</span>
+          ${remainingSec > 0 ? html`<span>残り予定 ${fmtDuration(remainingSec)}</span>` : ""}
+        </div>
+        <div class="card-sub">
+          <label class="policy-label">色ポリシー
+            <select name="policy" hx-post="/ui/projects/${project.id}/policy" hx-target="#projects" hx-swap="outerHTML">
+              ${opt("strict")}${opt("propagate")}
+            </select>
+          </label>
+        </div>
+      </div>
+    </li>
+  `;
+}
+
+function renderProjectsInner(repo: Repo): Html {
+  const projects = repo.listProjects();
+  const jobs = repo.listJobs();
+  const list =
+    projects.length === 0
+      ? html`<li class="empty">プロジェクトがありません</li>`
+      : html`${projects.map((p) => projectCard(p, jobs))}`;
+  return html`<div id="projects">
+    <form class="proj-new" hx-post="/ui/projects" hx-target="#projects" hx-swap="outerHTML">
+      <input name="name" placeholder="新しいプロジェクト名" required />
+      <select name="policy">
+        <option value="strict">厳密（色を固定）</option>
+        <option value="propagate">伝播（代替色を継承）</option>
+      </select>
+      <button class="act primary" type="submit">作成</button>
+    </form>
+    <ul class="queue">${list}</ul>
+  </div>`;
+}
+
+function renderProjectsPage(repo: Repo): Html {
+  return html`<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>プロジェクト — Auto-swap</title>
+  <script src="/vendor/htmx.min.js" defer></script>
+  <style>${raw(STYLES)}</style>
+</head>
+<body>
+  <header class="topbar"><h1>プロジェクト</h1>${nav("projects")}</header>
+  <main>${renderProjectsInner(repo)}</main>
+</body>
+</html>`;
+}
+
 function renderDashboard(data: DashboardData): Html {
   return html`<!doctype html>
 <html lang="ja">
@@ -430,6 +553,7 @@ function renderDashboard(data: DashboardData): Html {
 <body>
   <header class="topbar">
     <h1>印刷キュー</h1>
+    ${nav("queue")}
     <div class="upload-wrap">
       <label class="upload" id="dropzone">
         <input type="file" accept=".gcode.3mf,.3mf" hidden id="fileInput" />
@@ -626,6 +750,15 @@ const STYLES = `
   body{margin:0;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
   .topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;background:var(--card);border-bottom:1px solid var(--line)}
   .topbar h1{font-size:17px;margin:0}
+  .nav{display:flex;gap:6px;margin-right:auto;margin-left:16px}
+  .navlink{font-size:14px;padding:6px 12px;border-radius:8px;color:var(--muted);text-decoration:none}
+  .navlink:hover{background:#f3f4f6}
+  .navlink.active{color:var(--blue);background:#eef4ff;font-weight:600}
+  .proj-new{display:flex;gap:8px;flex-wrap:wrap;margin:14px 18px}
+  .proj-new input{flex:1;min-width:180px;font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:8px}
+  .proj-new select{font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:#fff}
+  .policy-label{display:inline-flex;gap:8px;align-items:center}
+  .policy-label select{font:inherit;padding:4px 8px;border:1px solid var(--line);border-radius:8px;background:#fff}
   .upload-wrap{display:flex;align-items:center;gap:10px}
   .upload{display:inline-flex;align-items:center;gap:6px;font-size:13px;padding:6px 12px;border:1px dashed var(--blue);border-radius:8px;color:var(--blue);background:#f5f8ff;cursor:pointer}
   .upload:hover{background:#eaf1ff}
