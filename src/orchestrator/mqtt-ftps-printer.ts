@@ -47,4 +47,9 @@ export class MqttFtpsPrinter implements PrinterPort {
     // swap sequence) as a normal print. The eject 3mf is a pre-made artifact
     // (spec 19 open item). For now stop() drives the printer toward IDLE.
   }
+
+  async resumeWithAlternateSlot(_jobId: number, _slot: number): Promise<void> {
+    // TODO(spec 14/16): exact MQTT resume-on-alternate-slot command is unverified
+    // against real hardware. Best-effort no-op until confirmed.
+  }
 }

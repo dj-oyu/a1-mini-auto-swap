@@ -66,6 +66,9 @@ class StubDirectPrinter implements PrinterPort {
   async ejectAndReset(): Promise<void> {
     this.printer.stop();
   }
+  async resumeWithAlternateSlot(): Promise<void> {
+    // scenarios exercise runout via FilamentService/__control, not this path
+  }
 }
 
 /** Notifier adapter that records events for invariant checks (INV-NOTIFY-01). */
