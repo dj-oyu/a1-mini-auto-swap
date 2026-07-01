@@ -37,6 +37,24 @@ export function extractFilaments(threemf: Buffer): FilamentInfo[] {
 }
 
 /**
+ * Extract an embedded plate thumbnail PNG (spec 17 §6 — visual pre-print check).
+ * Bambu Studio writes several under Metadata/ (plate_1.png, top_1.png, …); we
+ * prefer the lit plate render, then fall back to any Metadata PNG. Returns the
+ * raw PNG bytes, or null when the archive carries no thumbnail.
+ */
+export function extractThumbnail(threemf: Buffer): Uint8Array | null {
+  const files = unzipSync(threemf);
+  const names = Object.keys(files);
+  const isPng = (n: string) => /\.png$/i.test(n);
+  const preferred =
+    names.find((n) => /^Metadata\/plate_\d+\.png$/i.test(n)) ??
+    names.find((n) => /^Metadata\/.*\.png$/i.test(n)) ??
+    names.find((n) => n.startsWith("Metadata/") && isPng(n)) ??
+    names.find(isPng);
+  return preferred ? (files[preferred] ?? null) : null;
+}
+
+/**
  * Inject the end sequence into `Metadata/{plate}.gcode`, recompute
  * `Metadata/{plate}.gcode.md5`, and return a fresh .gcode.3mf. The input buffer
  * is never modified (INV-INJECT-03); placeholders in the snippet are resolved
