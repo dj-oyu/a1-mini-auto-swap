@@ -42,6 +42,14 @@ export function createUiApp(repo: Repo): Hono {
   // client (and htmx) can re-fetch it on any event without a full page reload.
   app.get("/ui/dashboard", (c) => c.html(renderDashboardInner(snapshot())));
 
+  // GET /ui/queue/:id/confirm — the filament-confirm modal for a processing job
+  // (spec 17 §6). Loaded into #modal by htmx; submits via PATCH (client-side).
+  app.get("/ui/queue/:id/confirm", (c) => {
+    const id = Number(c.req.param("id"));
+    const job = Number.isInteger(id) && id > 0 ? repo.getJob(id) : null;
+    return c.html(renderConfirmPanel(job));
+  });
+
   // ── htmx action routes (MVP #2) ─────────────────────────────────────────────
   // These return the re-rendered #dashboard fragment so htmx can swap it in
   // place. They are thin adapters over the Repo — the same mutations the JSON
@@ -166,9 +174,84 @@ function jobCard(job: JobRow): Html {
           ${substituted
             ? html`<span class="subst" title="自動で色が代替されました">⚠ 色代替</span>`
             : ""}
+          ${job.status === "processing"
+            ? html`<button class="act primary card-confirm" hx-get="/ui/queue/${job.id}/confirm" hx-target="#modal" hx-swap="innerHTML">フィラメント確認</button>`
+            : ""}
         </div>
       </div>
     </li>
+  `;
+}
+
+/** Parse jobs.ams_mapping into a 4-element array of tray indices (-1 default). */
+function parseMapping(json: string | null): number[] {
+  const out = [-1, -1, -1, -1];
+  if (!json) return out;
+  try {
+    const v = JSON.parse(json) as unknown;
+    if (Array.isArray(v)) {
+      for (let i = 0; i < 4; i++) {
+        if (Number.isInteger(v[i])) out[i] = v[i] as number;
+      }
+    }
+  } catch {
+    /* keep defaults */
+  }
+  return out;
+}
+
+function swatchDot(color: string): Html {
+  const hex = safeHex(color);
+  const style = hex
+    ? `background:${hex}`
+    : "background:repeating-linear-gradient(45deg,#ccc,#ccc 3px,#eee 3px,#eee 6px)";
+  return html`<span class="swatch" style="${style}"></span>`;
+}
+
+/** The filament-confirm modal (spec 17 §6): per-slot color swatch + an AMS tray
+ *  dropdown. Submitting PATCHes /api/queue/:id/filaments (client-side, see
+ *  LIVE_SCRIPT) and moves the job processing→queued. The last line of defense
+ *  against a wrong mapping, so it leans on color, not just text. */
+function renderConfirmPanel(job: JobRow | null): Html {
+  if (!job) {
+    return html`<div class="modal-overlay" data-close><div class="modal-box">ジョブが見つかりません。<div class="modal-actions"><button class="act" data-close>閉じる</button></div></div></div>`;
+  }
+  if (job.status !== "processing") {
+    return html`<div class="modal-overlay" data-close><div class="modal-box">このジョブは確認待ちではありません（${STATUS_META[job.status].label}）。<div class="modal-actions"><button class="act" data-close>閉じる</button></div></div></div>`;
+  }
+  const filaments = parseFilaments(job.filaments);
+  const mapping = parseMapping(job.ams_mapping);
+  const rows =
+    filaments.length === 0
+      ? html`<p class="muted">検出されたフィラメントがありません。</p>`
+      : filaments.map((f) => {
+          const cur = mapping[f.slot - 1] ?? -1;
+          const opts = [-1, 0, 1, 2, 3].map(
+            (t) =>
+              html`<option value="${t}" ${t === cur ? "selected" : ""}>${
+                t === -1 ? "未使用" : `AMS ${t + 1}`
+              }</option>`,
+          );
+          return html`
+            <div class="fil-row">
+              ${swatchDot(f.color)}
+              <span class="fil-slot">スロット ${f.slot}</span>
+              <select data-slot="${f.slot}">${opts}</select>
+            </div>
+          `;
+        });
+  return html`
+    <div class="modal-overlay" data-close>
+      <div class="modal-box" data-confirm-job="${job.id}">
+        <h2 class="modal-title">フィラメント確認</h2>
+        <p class="muted">${job.filename}</p>
+        <div class="fil-list">${rows}</div>
+        <div class="modal-actions">
+          <button class="act" data-close>キャンセル</button>
+          <button class="act primary" data-confirm="${job.id}">この内容で確定</button>
+        </div>
+      </div>
+    </div>
   `;
 }
 
@@ -278,6 +361,7 @@ function renderDashboard(data: DashboardData): Html {
 <body>
   <header class="topbar"><h1>印刷キュー</h1></header>
   ${renderDashboardInner(data)}
+  <div id="modal"></div>
   <script>${raw(LIVE_SCRIPT)}</script>
 </body>
 </html>`;
@@ -316,10 +400,37 @@ const LIVE_SCRIPT = `
     setInterval(updatePrinting, 30000);
     document.body.addEventListener('htmx:afterSwap', updatePrinting);
 
-    if (!window.EventSource) return;
-    var refresh = function () {
+    function refresh() {
       if (window.htmx) window.htmx.ajax('GET', '/ui/dashboard', { target: '#dashboard', swap: 'outerHTML' });
-    };
+    }
+    function closeModal() { var m = document.getElementById('modal'); if (m) m.innerHTML = ''; }
+
+    // MVP #5: the filament-confirm modal. Cancel/backdrop close it; 確定 gathers
+    // the per-slot AMS selects into a 4-element mapping and PATCHes the job.
+    document.body.addEventListener('click', function (e) {
+      if (e.target.hasAttribute && e.target.hasAttribute('data-close')) { closeModal(); return; }
+      var btn = e.target.closest && e.target.closest('[data-confirm]');
+      if (!btn) return;
+      var id = btn.getAttribute('data-confirm');
+      var box = btn.closest('.modal-box');
+      var map = [-1, -1, -1, -1];
+      box.querySelectorAll('select[data-slot]').forEach(function (s) {
+        var slot = Number(s.getAttribute('data-slot'));
+        if (slot >= 1 && slot <= 4) map[slot - 1] = Number(s.value);
+      });
+      btn.disabled = true;
+      fetch('/api/queue/' + id + '/filaments', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ams_mapping: map }),
+      }).then(function (r) {
+        btn.disabled = false;
+        if (r.ok) { closeModal(); refresh(); }
+        else { box.classList.add('error'); }
+      }).catch(function () { btn.disabled = false; box.classList.add('error'); });
+    });
+
+    if (!window.EventSource) return;
     var es = new EventSource('/events');
     ['job_started','job_finished','job_failed','waiting_for_refill','pending_action','filament_switched','timeout']
       .forEach(function (t) { es.addEventListener(t, refresh); });
@@ -360,8 +471,22 @@ const STYLES = `
   .pending .plink + .act{margin-left:0}
   .act{font:inherit;font-size:13px;padding:5px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);cursor:pointer}
   .act:hover{background:#f3f4f6}
+  .act.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  .act.primary:hover{background:#1d4ed8}
+  .act:disabled{opacity:.5;cursor:default}
   .pending.red .act{border-color:var(--red);color:var(--red)}
   .pending .act[hx-post*="stocker"]{border-color:var(--amber);color:var(--amber)}
+  .card-confirm{margin-left:auto}
+  .modal-overlay{position:fixed;inset:0;background:rgba(17,24,40,.45);display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}
+  .modal-box{background:var(--card);border-radius:14px;padding:20px;max-width:460px;width:100%;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+  .modal-box.error{outline:2px solid var(--red)}
+  .modal-title{margin:0 0 2px;font-size:17px}
+  .muted{color:var(--muted);font-size:13px;margin:0 0 12px}
+  .fil-list{display:flex;flex-direction:column;gap:8px;margin:8px 0 16px}
+  .fil-row{display:flex;gap:10px;align-items:center}
+  .fil-slot{min-width:84px}
+  .fil-row select{margin-left:auto;font:inherit;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:#fff}
+  .modal-actions{display:flex;gap:8px;justify-content:flex-end}
   main{padding:0 18px 24px}
   .queue{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
   .empty{color:var(--muted);padding:24px;text-align:center}
