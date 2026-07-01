@@ -7,7 +7,7 @@ import {
   type InboundCommand,
   reportTopic,
   requestTopic,
-} from "./topics.ts";
+} from "../protocol/topics.ts";
 import { ensureCerts } from "./tls.ts";
 
 export interface MqttServerOptions {

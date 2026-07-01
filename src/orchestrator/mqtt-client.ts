@@ -1,6 +1,6 @@
 import mqtt, { type MqttClient as MqttConn } from "mqtt";
 import { EventEmitter } from "node:events";
-import { reportTopic, requestTopic } from "../stub/topics.ts";
+import { reportTopic, requestTopic } from "../protocol/topics.ts";
 
 /** Normalized printer status the orchestrator consumes (from push_status). */
 export interface PrinterStatus {
