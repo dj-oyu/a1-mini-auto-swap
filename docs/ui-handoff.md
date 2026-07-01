@@ -84,10 +84,11 @@ bun run typecheck
 | POST | `/api/stocker/refill` | 200（残数=capacity、`stocker_refill` pending も解決） |
 | PATCH | `/api/queue/:id/filaments` | `{ ams_mapping:number[4](-1..3), filaments? }` → 200 `JobRow`（processing→queued、`filament_confirm` pending も解決）／ 400 / 404 / **409（processing 以外は確定不可）** |
 | GET | `/api/queue/:id/thumbnail` | キャッシュ 3mf 内蔵のプレートPNG（`image/png`）／ 404 |
+| GET | `/api/queue/:id/model` | 3mf から抽出したメッシュ `{ positions:number[], indices:number[] }`（Three.jsビューア用）／ 404 |
 | GET | `/events` | **SSE**。全 `NotifyEvent` をブラウザへ push（実装済み） |
 
 ### 未実装（spec 8章にあるが未着手＝UI担当が必要に応じて追加）
-- `GET /api/queue/:id/model`（3Dプレビュー用メッシュ）/ `GET /api/queue/:id/filaments`。
+- `GET /api/queue/:id/filaments`。
 - `POST /api/queue/:id/abort`（印刷中止→排出）。
 - `PATCH /api/queue/reorder`（並び替え）。
 - `GET /api/printer/status`（進捗/温度/ETA）/ `GET /api/printer/snapshot`（カメラ最新フレーム）。

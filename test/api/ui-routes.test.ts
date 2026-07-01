@@ -152,12 +152,55 @@ describe("GET / (dashboard SSR)", () => {
       expect(r.text).toContain('onerror="this.remove()"'); // graceful when no thumb
     });
 
-    test("the confirm modal shows the thumbnail above the filament rows", async () => {
-      const id = repo.createJob({ filename: "p.3mf", filaments: [{ slot: 1, color: "#111" }] });
+    test("the confirm modal embeds the 3D viewer with a thumbnail fallback", async () => {
+      const id = repo.createJob({ filename: "p.3mf", filaments: [{ slot: 1, color: "#112233" }] });
       const res = await app.request(`/ui/queue/${id}/confirm`);
       const text = await res.text();
-      expect(text).toContain('class="confirm-thumb"');
-      expect(text).toContain(`src="/api/queue/${id}/thumbnail"`);
+      expect(text).toContain('class="viewer"');
+      expect(text).toContain(`data-model-url="/api/queue/${id}/model"`);
+      expect(text).toContain('data-color="#112233"'); // seeded from first filament
+      expect(text).toContain(`src="/api/queue/${id}/thumbnail"`); // fallback img
+    });
+  });
+
+  describe("3D viewer (MVP #6)", () => {
+    test("the page loads vendored three via an import map (no CDN)", async () => {
+      const r = await body();
+      expect(r.text).toContain('type="importmap"');
+      expect(r.text).toContain('"three":"/vendor/three.module.min.js"');
+      expect(r.text).toContain('src="/vendor/viewer.js"');
+      expect(r.text).not.toContain("unpkg");
+      expect(r.text).not.toContain("cdn");
+    });
+
+    test("serves the vendored three module + viewer script", async () => {
+      const three = await app.request("/vendor/three.module.min.js");
+      expect(three.status).toBe(200);
+      const viewer = await app.request("/vendor/viewer.js");
+      expect(viewer.status).toBe(200);
+      expect(await viewer.text()).toContain("initViewers");
+    });
+
+    test("clicking a card thumbnail opens the 3D preview modal", async () => {
+      const id = repo.createJob({ filename: "p.3mf" });
+      const r = await body();
+      expect(r.text).toContain(`hx-get="/ui/queue/${id}/preview"`);
+    });
+
+    test("GET .../preview renders a viewer modal", async () => {
+      const id = repo.createJob({ filename: "p.3mf" });
+      const res = await app.request(`/ui/queue/${id}/preview`);
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).toContain("3D プレビュー");
+      expect(text).toContain(`data-model-url="/api/queue/${id}/model"`);
+      expect(text).toContain("modal-overlay");
+    });
+
+    test("preview of a missing job is friendly, not a crash", async () => {
+      const res = await app.request("/ui/queue/999999/preview");
+      expect(res.status).toBe(200);
+      expect(await res.text()).toContain("見つかりません");
     });
   });
 
@@ -190,10 +233,10 @@ describe("GET / (dashboard SSR)", () => {
       const id = repo.createJob({ filename: "done.3mf" });
       repo.updateStatus(id, "queued");
       const r = await body();
-      // only the queued job exists → no confirm-button markup on any card
-      // (the string "/confirm" also appears in the upload client script, so
-      // assert on the card's hx-get attribute specifically)
-      expect(r.text).not.toContain('hx-get="/ui/queue/');
+      // only the queued job exists → no confirm-button markup on any card.
+      // (cards still carry a /preview hx-get, and the upload script mentions
+      // "/confirm", so assert on the confirm endpoint's exact attribute form)
+      expect(r.text).not.toContain('/confirm"');
     });
 
     test("GET .../confirm renders a swatch + AMS dropdown per filament slot", async () => {

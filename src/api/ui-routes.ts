@@ -50,6 +50,14 @@ export function createUiApp(repo: Repo): Hono {
     return c.html(renderConfirmPanel(job));
   });
 
+  // GET /ui/queue/:id/preview — a read-only 3D preview modal (any job), opened
+  // by clicking a card's thumbnail (spec 17 §9).
+  app.get("/ui/queue/:id/preview", (c) => {
+    const id = Number(c.req.param("id"));
+    const job = Number.isInteger(id) && id > 0 ? repo.getJob(id) : null;
+    return c.html(renderPreviewPanel(job));
+  });
+
   // ── htmx action routes (MVP #2) ─────────────────────────────────────────────
   // These return the re-rendered #dashboard fragment so htmx can swap it in
   // place. They are thin adapters over the Repo — the same mutations the JSON
@@ -174,7 +182,7 @@ function jobCard(job: JobRow): Html {
   const substituted = job.substituted_color != null;
   return html`
     <li class="card status-${meta.cls}" data-job-id="${job.id}">
-      <img class="card-thumb" src="/api/queue/${job.id}/thumbnail" alt="" loading="lazy" onerror="this.remove()" />
+      <img class="card-thumb" src="/api/queue/${job.id}/thumbnail" alt="3Dプレビューを開く" title="3Dプレビュー" loading="lazy" onerror="this.remove()" hx-get="/ui/queue/${job.id}/preview" hx-target="#modal" hx-swap="innerHTML" />
       <div class="card-main">
         <div class="card-title">
           <span class="badge ${meta.cls}">${meta.label}</span>
@@ -196,6 +204,24 @@ function jobCard(job: JobRow): Html {
   `;
 }
 
+/** Read-only 3D preview modal for any job (spec 17 §9). */
+function renderPreviewPanel(job: JobRow | null): Html {
+  if (!job) {
+    return html`<div class="modal-overlay" data-close><div class="modal-box">ジョブが見つかりません。<div class="modal-actions"><button class="act" data-close>閉じる</button></div></div></div>`;
+  }
+  const filaments = parseFilaments(job.filaments);
+  return html`
+    <div class="modal-overlay" data-close>
+      <div class="modal-box">
+        <h2 class="modal-title">3D プレビュー</h2>
+        <p class="muted">${job.filename}</p>
+        ${renderViewer(job.id, filaments[0]?.color)}
+        <div class="modal-actions"><button class="act" data-close>閉じる</button></div>
+      </div>
+    </div>
+  `;
+}
+
 /** Parse jobs.ams_mapping into a 4-element array of tray indices (-1 default). */
 function parseMapping(json: string | null): number[] {
   const out = [-1, -1, -1, -1];
@@ -211,6 +237,17 @@ function parseMapping(json: string | null): number[] {
     /* keep defaults */
   }
   return out;
+}
+
+/** A 3D preview container (spec 17 §9). viewer.js loads /model into a Three.js
+ *  canvas here; until then / on failure the fallback thumbnail <img> shows. */
+function renderViewer(jobId: number, colorHex?: string): Html {
+  const color = colorHex && safeHex(colorHex) ? colorHex : "#4b9fea";
+  return html`
+    <div class="viewer" data-model-url="/api/queue/${jobId}/model" data-color="${color}">
+      <img class="viewer-fallback" src="/api/queue/${jobId}/thumbnail" alt="" onerror="this.remove()" />
+    </div>
+  `;
 }
 
 function swatchDot(color: string): Html {
@@ -258,7 +295,7 @@ function renderConfirmPanel(job: JobRow | null): Html {
       <div class="modal-box" data-confirm-job="${job.id}">
         <h2 class="modal-title">フィラメント確認</h2>
         <p class="muted">${job.filename}</p>
-        <img class="confirm-thumb" src="/api/queue/${job.id}/thumbnail" alt="" onerror="this.remove()" />
+        ${renderViewer(job.id, filaments[0]?.color)}
         <div class="fil-list">${rows}</div>
         <div class="modal-actions">
           <button class="act" data-close>キャンセル</button>
@@ -370,6 +407,8 @@ function renderDashboard(data: DashboardData): Html {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Auto-swap 印刷キュー</title>
   <script src="/vendor/htmx.min.js" defer></script>
+  <script type="importmap">${raw('{"imports":{"three":"/vendor/three.module.min.js"}}')}</script>
+  <script type="module" src="/vendor/viewer.js"></script>
   <style>${raw(STYLES)}</style>
 </head>
 <body>
@@ -565,8 +604,10 @@ const STYLES = `
   .empty{color:var(--muted);padding:24px;text-align:center}
   .card{display:flex;gap:12px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--grey);border-radius:10px;padding:12px 14px}
   .card-main{flex:1;min-width:0}
-  .card-thumb{width:56px;height:56px;flex:none;object-fit:cover;border-radius:8px;background:#eef2f7;border:1px solid var(--line)}
-  .confirm-thumb{display:block;width:100%;max-height:200px;object-fit:contain;background:#f6f7f9;border:1px solid var(--line);border-radius:10px;margin:8px 0 12px}
+  .card-thumb{width:56px;height:56px;flex:none;object-fit:cover;border-radius:8px;background:#eef2f7;border:1px solid var(--line);cursor:pointer}
+  .viewer{position:relative;width:100%;height:260px;background:#f6f7f9;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:8px 0 12px}
+  .viewer canvas{display:block;width:100%;height:100%}
+  .viewer-fallback{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
   .card.status-blue{border-left-color:var(--blue)} .card.status-green{border-left-color:var(--green)}
   .card.status-red{border-left-color:var(--red)} .card.status-amber{border-left-color:var(--amber)}
   .card.status-slate{border-left-color:var(--slate)} .card.status-grey{border-left-color:var(--grey)}
