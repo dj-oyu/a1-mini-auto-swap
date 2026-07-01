@@ -124,16 +124,28 @@ interface Filament {
   type?: string;
 }
 
-/** Parse the jobs.filaments JSON defensively; never throw into the renderer. */
+/** Parse the jobs.filaments JSON defensively and normalize the slot number.
+ *  Uploads store the extractor's shape ({index,color,type}, 0-based); the seed
+ *  uses {slot,...} (1-based). Normalize both to a 1-based `slot` (falling back to
+ *  array position) so the confirm mapping lines up with AMS trays. Never throws. */
 function parseFilaments(json: string | null): Filament[] {
   if (!json) return [];
   try {
     const v = JSON.parse(json) as unknown;
     if (!Array.isArray(v)) return [];
-    return v.filter(
-      (f): f is Filament =>
-        !!f && typeof f === "object" && typeof (f as Filament).color === "string",
-    );
+    const out: Filament[] = [];
+    v.forEach((raw, i) => {
+      if (!raw || typeof raw !== "object") return;
+      const f = raw as { slot?: unknown; index?: unknown; color?: unknown; type?: unknown };
+      if (typeof f.color !== "string") return;
+      const slot = Number.isInteger(f.slot)
+        ? (f.slot as number)
+        : Number.isInteger(f.index)
+          ? (f.index as number) + 1
+          : i + 1;
+      out.push({ slot, color: f.color, type: typeof f.type === "string" ? f.type : undefined });
+    });
+    return out;
   } catch {
     return [];
   }
@@ -359,7 +371,16 @@ function renderDashboard(data: DashboardData): Html {
   <style>${raw(STYLES)}</style>
 </head>
 <body>
-  <header class="topbar"><h1>印刷キュー</h1></header>
+  <header class="topbar">
+    <h1>印刷キュー</h1>
+    <div class="upload-wrap">
+      <label class="upload" id="dropzone">
+        <input type="file" accept=".gcode.3mf,.3mf" hidden id="fileInput" />
+        <span>＋ 3MF をアップロード</span>
+      </label>
+      <span class="upload-status" id="uploadStatus"></span>
+    </div>
+  </header>
   ${renderDashboardInner(data)}
   <div id="modal"></div>
   <script>${raw(LIVE_SCRIPT)}</script>
@@ -430,6 +451,51 @@ const LIVE_SCRIPT = `
       }).catch(function () { btn.disabled = false; box.classList.add('error'); });
     });
 
+    // MVP #5: drag-drop / pick a .gcode.3mf → POST /api/queue → open its confirm
+    // modal. Listeners live on the persistent topbar (not swapped by SSE).
+    function openConfirm(id) {
+      if (window.htmx) window.htmx.ajax('GET', '/ui/queue/' + id + '/confirm', { target: '#modal', swap: 'innerHTML' });
+    }
+    function setUploadStatus(msg) { var el = document.getElementById('uploadStatus'); if (el) el.textContent = msg; }
+    function uploadFile(file) {
+      if (!file) return;
+      setUploadStatus('アップロード中… ' + file.name);
+      file.arrayBuffer().then(function (buf) {
+        return fetch('/api/queue?filename=' + encodeURIComponent(file.name), {
+          method: 'POST',
+          headers: { 'content-type': 'application/octet-stream' },
+          body: buf,
+        });
+      }).then(function (r) {
+        return r.json().then(function (data) { return { ok: r.ok, data: data }; });
+      }).then(function (res) {
+        if (res.ok && res.data && res.data.id != null) {
+          setUploadStatus('');
+          refresh();
+          openConfirm(res.data.id);
+        } else {
+          setUploadStatus('アップロード失敗: ' + ((res.data && res.data.error) || 'unknown'));
+        }
+      }).catch(function () { setUploadStatus('アップロード失敗'); });
+    }
+    var fileInput = document.getElementById('fileInput');
+    if (fileInput) fileInput.addEventListener('change', function () {
+      if (this.files && this.files[0]) uploadFile(this.files[0]);
+      this.value = '';
+    });
+    var dz = document.getElementById('dropzone');
+    if (dz) {
+      ['dragenter', 'dragover'].forEach(function (ev) {
+        dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.add('drag'); });
+      });
+      ['dragleave', 'drop'].forEach(function (ev) {
+        dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.remove('drag'); });
+      });
+      dz.addEventListener('drop', function (e) {
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) uploadFile(e.dataTransfer.files[0]);
+      });
+    }
+
     if (!window.EventSource) return;
     var es = new EventSource('/events');
     ['job_started','job_finished','job_failed','waiting_for_refill','pending_action','filament_switched','timeout']
@@ -445,6 +511,11 @@ const STYLES = `
   body{margin:0;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
   .topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;background:var(--card);border-bottom:1px solid var(--line)}
   .topbar h1{font-size:17px;margin:0}
+  .upload-wrap{display:flex;align-items:center;gap:10px}
+  .upload{display:inline-flex;align-items:center;gap:6px;font-size:13px;padding:6px 12px;border:1px dashed var(--blue);border-radius:8px;color:var(--blue);background:#f5f8ff;cursor:pointer}
+  .upload:hover{background:#eaf1ff}
+  .upload.drag{background:#dbe7ff;border-style:solid}
+  .upload-status{font-size:13px;color:var(--muted)}
   .statusline{display:flex;justify-content:flex-end;padding:12px 18px 0}
   .printing{margin:12px 18px;padding:14px 16px;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--blue);border-radius:12px}
   .printing-head{display:flex;gap:10px;align-items:center}
