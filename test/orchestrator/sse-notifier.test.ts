@@ -47,6 +47,17 @@ describe("SseBroadcaster", () => {
     expect(b.clientCount()).toBe(1); // dead client pruned
   });
 
+  test("sendProgress emits an event: progress frame with the JSON payload", () => {
+    const b = new SseBroadcaster();
+    const frames: string[] = [];
+    b.subscribe((f) => frames.push(f));
+    b.sendProgress({ printing: true, job_id: 3, percent: 88, remaining_min: 5 });
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toContain("event: progress");
+    expect(frames[0]).toContain('"percent":88');
+    expect(frames[0]!.endsWith("\n\n")).toBe(true);
+  });
+
   test("open() returns an SSE Response and registers a client", () => {
     const b = new SseBroadcaster();
     const res = b.open();

@@ -493,8 +493,7 @@ const LIVE_SCRIPT = `
         .catch(function () { updatePrinting(); });
     }
 
-    pollStatus();
-    setInterval(pollStatus, 10000);
+    pollStatus(); // initial populate; live updates then arrive via SSE 'progress'
     document.body.addEventListener('htmx:afterSwap', updatePrinting);
 
     function refresh() {
@@ -604,10 +603,18 @@ const LIVE_SCRIPT = `
       });
     }
 
-    if (!window.EventSource) return;
+    if (!window.EventSource) {
+      setInterval(pollStatus, 15000); // no SSE → fall back to polling the header
+      return;
+    }
     var es = new EventSource('/events');
     ['job_started','job_finished','job_failed','waiting_for_refill','pending_action','filament_switched','timeout']
       .forEach(function (t) { es.addEventListener(t, refresh); });
+    // push-based measured ETA: apply each progress frame directly to the header
+    es.addEventListener('progress', function (e) {
+      try { liveStatus = JSON.parse(e.data); } catch (_) {}
+      updatePrinting();
+    });
   })();
 `;
 
