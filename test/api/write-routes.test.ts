@@ -277,6 +277,31 @@ describe("DELETE /api/queue/:id", () => {
   });
 });
 
+describe("POST /api/queue/:id/abort (spec ch8/19)", () => {
+  test("aborts a printing job (aborted:true, status aborted)", async () => {
+    repo.setStocker(10, 10);
+    const id = repo.createJob({ filename: "a.3mf" });
+    repo.updateStatus(id, "printing");
+    const res = await app.request(`/api/queue/${id}/abort`, { method: "POST" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ aborted: true });
+    expect(repo.getJob(id)?.status).toBe("aborted");
+  });
+
+  test("409s when the job is not printing", async () => {
+    const id = repo.createJob({ filename: "a.3mf" });
+    repo.updateStatus(id, "queued");
+    const res = await app.request(`/api/queue/${id}/abort`, { method: "POST" });
+    expect(res.status).toBe(409);
+    expect(repo.getJob(id)?.status).toBe("queued");
+  });
+
+  test("404s for a missing or invalid id", async () => {
+    expect((await app.request("/api/queue/999999/abort", { method: "POST" })).status).toBe(404);
+    expect((await app.request("/api/queue/abc/abort", { method: "POST" })).status).toBe(404);
+  });
+});
+
 describe("PATCH /api/queue/:id/filaments (spec ch8)", () => {
   const patch = (id: number | string, body: unknown) =>
     app.request(`/api/queue/${id}/filaments`, {
