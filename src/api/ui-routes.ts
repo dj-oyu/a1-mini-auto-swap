@@ -522,12 +522,13 @@ const POLICY_LABEL: Record<ColorConsistencyPolicy, string> = {
 
 const ACTIVE_STATUSES: JobStatus[] = ["processing", "queued", "printing", "waiting_for_refill"];
 
-/** Top navigation shared by the dashboard and the projects page. */
-function nav(active: "queue" | "projects"): Html {
+/** Top navigation shared by the dashboard, projects and verify pages. */
+function nav(active: "queue" | "projects" | "verify"): Html {
   const cls = (k: string) => (k === active ? "navlink active" : "navlink");
   return html`<nav class="nav">
     <a class="${cls("queue")}" href="/">キュー</a>
     <a class="${cls("projects")}" href="/projects">プロジェクト</a>
+    <a class="${cls("verify")}" href="/verify">実機検証</a>
   </nav>`;
 }
 

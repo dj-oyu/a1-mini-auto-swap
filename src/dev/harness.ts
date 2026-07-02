@@ -11,6 +11,7 @@ import { createModelApp } from "../api/model-routes.ts";
 import { createPrinterApp, printerStatusView, type PrinterStatusSource } from "../api/printer-routes.ts";
 import { createSnapshotApp, type SnapshotSource } from "../api/snapshot-routes.ts";
 import { createUiApp } from "../api/ui-routes.ts";
+import { createVerifyApp } from "../api/verify-routes.ts";
 import { createEventsApp } from "../api/events-routes.ts";
 import { createAuth, createLoginApp } from "../api/auth.ts";
 import { SseBroadcaster } from "../orchestrator/sse-notifier.ts";
@@ -87,6 +88,31 @@ const fakeSnapshot: SnapshotSource = {
 };
 app.route("/", createSnapshotApp({ source: fakeSnapshot }));
 app.route("/", createUiApp(repo));
+// 実機検証ガイド (/verify): fake deps that succeed immediately, so the whole page
+// works with no printer/broker. runDiagnostics reports an all-green probe with a
+// PROT C fallback (the A1's ★ unverified case); printerStatus is IDLE so the
+// dry-run guard allows a run and Stage 4 passes; startDryRun/eject are no-ops.
+app.route(
+  "/",
+  createVerifyApp({
+    repo,
+    runDiagnostics: async () => ({
+      host: "printer-stub",
+      mqtt_reachable: true,
+      ftps_reachable: true,
+      mqtt_auth_ok: true,
+      report_received: true,
+      ftps_auth_ok: true,
+      prot_mode: "C",
+      prot_detail: "PROT P → 522; PROT C → 200",
+      sample_report: { gcode_state: "IDLE", mc_percent: 0, mc_remaining_time: 0, subtask_name: "" },
+      errors: {},
+    }),
+    printerStatus: () => ({ printing: false, job_id: null, percent: 0, remaining_min: 0, gcode_state: "IDLE" }),
+    startDryRun: async () => {},
+    eject: async () => {},
+  }),
+);
 app.route("/", createEventsApp(sse));
 
 // Dev-only test hook: reset in-memory state between E2E tests.
