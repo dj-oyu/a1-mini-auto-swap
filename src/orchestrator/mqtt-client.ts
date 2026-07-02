@@ -9,6 +9,11 @@ export interface PrinterStatus {
   mcRemainingTime: number; // minutes (spec 9 mc_remaining_time)
   mcPercent: number;
   subtaskName: string;
+  /** Layer progress (0 when the artifact carries no slice metadata, e.g. the
+   *  dry-rehearsal 3mf). layerNum >= totalLayerNum (>0) while RUNNING means
+   *  the print body is done and the appended end/swap sequence is next. */
+  layerNum: number;
+  totalLayerNum: number;
   hms: Array<{ attr: number; code: number }>;
 }
 
@@ -119,6 +124,8 @@ export class OrchestratorMqttClient extends EventEmitter {
         mcRemainingTime: parsed.data.mc_remaining_time,
         mcPercent: parsed.data.mc_percent,
         subtaskName: parsed.data.subtask_name,
+        layerNum: parsed.data.layer_num,
+        totalLayerNum: parsed.data.total_layer_num,
         hms: parsed.data.hms,
       };
       this.latestStatus = status;

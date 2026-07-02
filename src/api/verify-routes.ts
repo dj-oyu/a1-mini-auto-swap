@@ -37,6 +37,24 @@ export interface VerifyDeps {
   startDryRun: (includeSwap: boolean) => Promise<void>;
   /** stop + eject job (Stage 6). */
   eject: () => Promise<void>;
+
+  // ── TEMPORARY (実機検証用 — 確認後に削除, task#16) ──────────────────────────
+  // swap直前スナップショット+Discord写真付き報告のフィールドテスト。全て任意:
+  // 未配線ならUIセクションごと出ない(既存テスト/ハーネスは無変更で通る)。
+  /** TEMPORARY: capture one camera frame right now (relay-backed). */
+  testSnapshot?: () => Promise<Buffer | null>;
+  /** TEMPORARY: send a photo-attached completion report to Discord. */
+  sendPhotoReport?: (jpeg: Buffer, note: string) => Promise<boolean>;
+  /** TEMPORARY: arm/disarm the auto capture on the next print. */
+  armAutoCapture?: (armed: boolean) => void;
+  /** TEMPORARY: current auto-capture state for display. */
+  autoCaptureState?: () => TempAutoCaptureState;
+}
+
+/** TEMPORARY (実機検証用): auto-capture state surfaced in the wizard. */
+export interface TempAutoCaptureState {
+  armed: boolean;
+  fired: { trigger: string; at: string; photoSent: boolean } | null;
 }
 
 // ── persisted progress (zod-validated round-trip) ─────────────────────────────
@@ -166,8 +184,8 @@ export function createVerifyApp(deps: VerifyDeps): Hono {
   const { repo } = deps;
   const app = new Hono();
 
-  app.get("/verify", (c) => c.html(renderVerifyPage(loadProgress(repo))));
-  app.get("/ui/verify", (c) => c.html(renderVerifyInner(loadProgress(repo))));
+  app.get("/verify", (c) => c.html(renderVerifyPage(loadProgress(repo), deps)));
+  app.get("/ui/verify", (c) => c.html(renderVerifyInner(loadProgress(repo), deps)));
 
   // Stage 1-3: run the diagnostics probe and auto-judge from the result.
   app.post("/ui/verify/run-diagnostics", async (c) => {
@@ -188,7 +206,7 @@ export function createVerifyApp(deps: VerifyDeps): Hono {
     setAuto(p, 2, r.mqtt_auth_ok && r.report_received);
     setAuto(p, 3, r.ftps_auth_ok);
     saveProgress(repo, p);
-    return c.html(renderVerifyInner(p));
+    return c.html(renderVerifyInner(p, deps));
   });
 
   // Stage 4: judge orchestrator reachability from the live printer status.
@@ -198,7 +216,7 @@ export function createVerifyApp(deps: VerifyDeps): Hono {
     p.printer = { ran_at: new Date().toISOString(), gcode_state: s.gcode_state, printing: s.printing };
     setAuto(p, 4, s.gcode_state === "IDLE");
     saveProgress(repo, p);
-    return c.html(renderVerifyInner(p));
+    return c.html(renderVerifyInner(p, deps));
   });
 
   // Stage 5: publish the dry-rehearsal job. `confirmed:true` is mandatory (server
@@ -234,6 +252,44 @@ export function createVerifyApp(deps: VerifyDeps): Hono {
     return c.json({ ok: true });
   });
 
+  // ── TEMPORARY routes (実機検証用 — 確認後に削除, task#16) ────────────────────
+  // In-memory last shot: this is throwaway test scaffolding; nothing persists.
+  let lastShot: Buffer | null = null;
+
+  // 📸 capture one frame now and hold it for preview/report.
+  app.post("/api/verify/test-snapshot", async (c) => {
+    if (!deps.testSnapshot) return c.json({ error: "not wired" }, 404);
+    const jpeg = await deps.testSnapshot();
+    if (!jpeg) return c.json({ error: "カメラからフレームを取得できませんでした" }, 502);
+    lastShot = jpeg;
+    return c.json({ ok: true, bytes: jpeg.length });
+  });
+
+  // preview of the held shot (cache-busted by the client).
+  app.get("/api/verify/test-snapshot.jpg", (c) => {
+    if (!lastShot) return c.json({ error: "no test snapshot yet" }, 404);
+    c.header("content-type", "image/jpeg");
+    c.header("cache-control", "no-store");
+    return c.body(new Uint8Array(lastShot) as Uint8Array<ArrayBuffer>);
+  });
+
+  // 🔔 send the held shot as a photo-attached completion report to Discord.
+  app.post("/api/verify/test-photo-report", async (c) => {
+    if (!deps.sendPhotoReport) return c.json({ error: "not wired" }, 404);
+    if (!lastShot) return c.json({ error: "先に📸撮影テストを実行してください" }, 400);
+    const ok = await deps.sendPhotoReport(lastShot, "実機検証テスト: 手動送信");
+    return ok ? c.json({ ok: true }) : c.json({ error: "Discord送信に失敗しました (webhook設定を確認)" }, 502);
+  });
+
+  // arm/disarm the auto capture on the next print's swap boundary.
+  app.post("/ui/verify/auto-capture", async (c) => {
+    if (deps.armAutoCapture) {
+      const form = await c.req.parseBody();
+      deps.armAutoCapture(form.armed === "1");
+    }
+    return c.html(renderVerifyInner(loadProgress(repo), deps));
+  });
+
   // Manual status + note update for any stage.
   app.post("/ui/verify/stage/:n", async (c) => {
     const n = Number(c.req.param("n"));
@@ -246,7 +302,7 @@ export function createVerifyApp(deps: VerifyDeps): Hono {
       if (typeof form.note === "string") st.note = form.note;
       saveProgress(repo, p);
     }
-    return c.html(renderVerifyInner(p));
+    return c.html(renderVerifyInner(p, deps));
   });
 
   return app;
@@ -455,10 +511,46 @@ function stageCard(def: StageDef, p: Progress): Html {
 }
 
 /** The reactive fragment (#verify) — everything htmx swaps in place. */
-function renderVerifyInner(p: Progress): Html {
+function renderVerifyInner(p: Progress, deps?: VerifyDeps): Html {
   return html`<div id="verify">
     <ol class="queue stage-list">${STAGES.map((s) => stageCard(s, p))}</ol>
+    ${deps ? tempPhotoSection(deps) : ""}
   </div>`;
+}
+
+/** ── TEMPORARY (実機検証用 — 確認後に削除, task#16) ──────────────────────────
+ *  swap直前スナップショット+Discord写真付き完成報告のフィールドテスト。
+ *  deps が配線されていない環境(テスト/一部ハーネス)では丸ごと非表示。 */
+function tempPhotoSection(deps: VerifyDeps): Html {
+  if (!deps.testSnapshot && !deps.sendPhotoReport && !deps.autoCaptureState) return html``;
+  const auto = deps.autoCaptureState?.() ?? { armed: false, fired: null };
+  return html`
+    <section class="banner amber" id="tempPhotoTest">
+      <div class="banner-head"><span class="banner-count">一時検証: swap直前スナップ+Discord報告</span></div>
+      <p class="muted">確認後に削除される一時機能です。カメラ→保存→Discord添付のパイプラインを実機で検証します。</p>
+      <div class="stage-body">
+        <button class="act" id="tempShotBtn" ${deps.testSnapshot ? "" : "disabled"}>📸 撮影テスト</button>
+        <button class="act" id="tempReportBtn" ${deps.sendPhotoReport ? "" : "disabled"}>🔔 写真付き完成報告テスト (Discord)</button>
+        <p id="tempPhotoMsg" class="muted"></p>
+        <img id="tempShotImg" class="snapshot" alt="" hidden />
+        ${
+          deps.armAutoCapture
+            ? html`<div class="temp-auto">
+                <label>
+                  <input type="checkbox" id="tempAutoArm" ${auto.armed ? "checked" : ""} />
+                  次の印刷で自動撮影+Discord送信（RUNNING中に layer==total 到達で発火。レイヤー情報が無い場合は FINISH 遷移で発火）
+                </label>
+                ${
+                  auto.fired
+                    ? html`<p class="muted">前回発火: ${auto.fired.trigger} / ${auto.fired.at} / Discord送信 ${auto.fired.photoSent ? "✓" : "✗"}</p>`
+                    : html`<p class="muted">まだ発火していません</p>`
+                }
+              </div>`
+            : ""
+        }
+      </div>
+    </section>
+  `;
 }
 
 function nav(active: "queue" | "projects" | "verify"): Html {
@@ -470,7 +562,7 @@ function nav(active: "queue" | "projects" | "verify"): Html {
   </nav>`;
 }
 
-function renderVerifyPage(p: Progress): Html {
+function renderVerifyPage(p: Progress, deps?: VerifyDeps): Html {
   return html`<!doctype html>
 <html lang="ja">
 <head>
@@ -491,7 +583,7 @@ function renderVerifyPage(p: Progress): Html {
       Windows ラップトップから A1 mini 実機を初めて叩くときの検証工程です。自動判定できるものは自動、
       物理確認は明示チェック。進捗と所見は保存されます。
     </p>
-    ${renderVerifyInner(p)}
+    ${renderVerifyInner(p, deps)}
   </main>
   <script src="/vendor/shared.js" defer></script>
   <script src="/vendor/verify.js" defer></script>

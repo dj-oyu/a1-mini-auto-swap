@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { openDb } from "./db/index.ts";
@@ -248,6 +248,59 @@ app.route(
   }),
 );
 app.route("/", createUiApp(repo)); // GET / → server-rendered dashboard (spec 17)
+// ── TEMPORARY (実機検証用 — 確認後に削除, task#16): swap直前スナップ+Discord ──
+// Field test of the pre-swap snapshot pipeline: camera relay frame → save →
+// Discord photo attachment. Auto trigger: while armed, fire ONCE when a
+// RUNNING report reaches layer_num >= total_layer_num (>0) — i.e. the print
+// body is done and the appended swap sequence is next — or, for artifacts
+// without slice metadata (dry-rehearsal 3mf reports 0/0), on the RUNNING→
+// FINISH edge as a fallback (captures right after the swap instead).
+const tempPhotoWebhook = DISCORD_WEBHOOK_URL
+  ? new WebhookNotifier({ url: DISCORD_WEBHOOK_URL, baseUrl: BASE_URL })
+  : undefined;
+const tempAutoState: { armed: boolean; fired: { trigger: string; at: string; photoSent: boolean } | null } = {
+  armed: false,
+  fired: null,
+};
+const tempSendPhotoReport = async (jpeg: Buffer, note: string): Promise<boolean> => {
+  if (!tempPhotoWebhook) return false;
+  try {
+    await tempPhotoWebhook.sendWithPhoto({ type: "job_finished", message: note }, jpeg, "preswap.jpg");
+    return true;
+  } catch (e) {
+    console.warn(`[temp-photo] Discord送信失敗: ${(e as Error).message}`);
+    return false;
+  }
+};
+const tempFire = async (trigger: string): Promise<void> => {
+  tempAutoState.armed = false; // fire once per arm
+  const jpeg = await cameraRelay.snapshot(10_000);
+  const photoSent = jpeg
+    ? await tempSendPhotoReport(jpeg, `実機検証テスト: swap直前スナップ (trigger=${trigger})`)
+    : false;
+  tempAutoState.fired = { trigger, at: new Date().toISOString(), photoSent };
+  if (jpeg) {
+    mkdirSync("./data/snapshots", { recursive: true });
+    writeFileSync(`./data/snapshots/preswap-test-${Date.now()}.jpg`, jpeg);
+  }
+  console.log(`[temp-photo] fired trigger=${trigger} frame=${jpeg ? jpeg.length + "B" : "none"} discord=${photoSent}`);
+};
+let tempPrevState = "";
+let tempLayerFired = false;
+mqtt.on("status", (s) => {
+  // TEMPORARY listener (task#16)
+  if (tempAutoState.armed) {
+    if (s.gcodeState === "RUNNING" && s.totalLayerNum > 0 && s.layerNum >= s.totalLayerNum && !tempLayerFired) {
+      tempLayerFired = true;
+      void tempFire("layer==total (swap直前)");
+    } else if (tempPrevState === "RUNNING" && s.gcodeState === "FINISH") {
+      void tempFire("FINISHエッジ (フォールバック)");
+    }
+  }
+  if (s.gcodeState !== "RUNNING") tempLayerFired = false;
+  tempPrevState = s.gcodeState;
+});
+
 app.route(
   "/",
   createVerifyApp({
@@ -258,6 +311,14 @@ app.route(
     printerStatus: () => printerStatusView(repo.listByStatus("printing")[0] ?? null, mqtt.latest()),
     startDryRun,
     eject: () => printer.ejectAndReset(),
+    // TEMPORARY (task#16):
+    testSnapshot: () => cameraRelay.snapshot(10_000),
+    sendPhotoReport: tempSendPhotoReport,
+    armAutoCapture: (armed) => {
+      tempAutoState.armed = armed;
+      if (armed) tempAutoState.fired = null;
+    },
+    autoCaptureState: () => ({ ...tempAutoState }),
   }),
 );
 app.route("/", createEventsApp(sse)); // GET /events → SSE live updates (spec 17)

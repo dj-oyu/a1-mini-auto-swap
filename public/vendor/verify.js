@@ -151,6 +151,55 @@
     }
   }
 
+  // ── TEMPORARY (実機検証用 — 確認後に削除, task#16): 一時検証セクション ──────
+  function tempMsg(text) {
+    var el = document.getElementById('tempPhotoMsg');
+    if (el) el.textContent = text;
+  }
+  document.body.addEventListener('click', function (e) {
+    var shot = e.target.closest && e.target.closest('#tempShotBtn');
+    if (shot) {
+      shot.disabled = true;
+      tempMsg('撮影中…（最大10秒）');
+      fetch('/api/verify/test-snapshot', { method: 'POST' })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          shot.disabled = false;
+          if (res.ok) {
+            tempMsg('撮影OK (' + Math.round(res.d.bytes / 1024) + 'KB)');
+            var img = document.getElementById('tempShotImg');
+            if (img) { img.hidden = false; img.src = '/api/verify/test-snapshot.jpg?t=' + Date.now(); }
+          } else {
+            tempMsg('撮影失敗: ' + (res.d.error || 'unknown'));
+          }
+        })
+        .catch(function () { shot.disabled = false; tempMsg('撮影失敗'); });
+      return;
+    }
+    var rep = e.target.closest && e.target.closest('#tempReportBtn');
+    if (rep) {
+      rep.disabled = true;
+      tempMsg('Discordへ送信中…');
+      fetch('/api/verify/test-photo-report', { method: 'POST' })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          rep.disabled = false;
+          tempMsg(res.ok ? 'Discordへ送信しました。チャンネルを確認してください' : '送信失敗: ' + (res.d.error || 'unknown'));
+        })
+        .catch(function () { rep.disabled = false; tempMsg('送信失敗'); });
+      return;
+    }
+  });
+  document.body.addEventListener('change', function (e) {
+    var arm = e.target.closest && e.target.closest('#tempAutoArm');
+    if (!arm) return;
+    var body = new FormData();
+    body.append('armed', arm.checked ? '1' : '0');
+    fetch('/ui/verify/auto-capture', { method: 'POST', body: body }).then(function () {
+      tempMsg(arm.checked ? '自動撮影をアームしました。次の印刷で発火します' : '自動撮影を解除しました');
+    });
+  });
+
   if (!window.EventSource) return; // no SSE → live display simply stays idle
   var es = new EventSource('/events');
   if (window.PF) window.PF.watchConnection(es, document.getElementById('connChip'));
