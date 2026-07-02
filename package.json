@@ -11,7 +11,7 @@
     "stub": "bun run src/stub/main.ts",
     "diag": "bun run scripts/diag.ts",
     "test": "bun test",
-    "test:ci": "bun test test/stub test/verify test/db test/orchestrator test/core test/injection test/api test/dev test/scripts",
+    "test:ci": "bun test test/stub test/verify test/db test/orchestrator test/core test/injection test/api test/dev test/scripts test/obs",
     "test:stub": "bun test test/stub",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
@@ -25,6 +25,7 @@
     "fflate": "^0.8.3",
     "hono": "^4.6.14",
     "mqtt": "^5.15.1",
+    "pino": "^10.3.1",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },

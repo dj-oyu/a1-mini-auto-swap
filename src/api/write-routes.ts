@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Dispatcher } from "../core/dispatcher.ts";
 import { isValidAmsMapping } from "../core/ams-mapping.ts";
 import type { Repo } from "../db/repo.ts";
+import { moduleLogger } from "../obs/default-logger.ts";
 
 // ── request-body schemas (spec ch8) ─────────────────────────────────────────
 // zod validates shape at the HTTP boundary; domain rules that also apply
@@ -79,7 +80,10 @@ function parseId(raw: string): number | null {
  *  failed start reverts the job to queued (dispatcher.dispatch). */
 function triggerDispatch(dispatcher: Dispatcher): void {
   void dispatcher.dispatchNext().catch((e) => {
-    console.warn(`[dispatch] start failed, job returned to queue: ${(e as Error).message}`);
+    moduleLogger("dispatch").warn("start failed, job returned to queue", {
+      event: "dispatch_start_failed",
+      err: e instanceof Error ? e.message : String(e),
+    });
   });
 }
 

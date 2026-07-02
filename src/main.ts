@@ -35,6 +35,9 @@ import { systemClock, type Notifier } from "./core/ports.ts";
 import { parseAmsMapping } from "./core/ams-mapping.ts";
 import { cacheFileName, printArtifactName, printerUploadPath } from "./core/artifact.ts";
 import { throttleUploadProgress } from "./orchestrator/upload-progress-throttle.ts";
+import { createRuntimeLogger } from "./obs/index.ts";
+import { StateLog } from "./orchestrator/state-log.ts";
+import { ReportRecorder } from "./orchestrator/report-recorder.ts";
 
 // Orchestrator entrypoint (spec 3): wires every adapter from env config into the
 // running core loop, and serves the HTTP API. Thin — the assembly logic lives
@@ -49,6 +52,14 @@ const num = (k: string, d: number) => {
   if (!Number.isFinite(n)) throw new Error(`env ${k} must be a number, got "${raw}"`);
   return n;
 };
+
+// Logging is wired FIRST so every adapter's module logger routes to the real
+// sinks (console + data/logs/*.jsonl) from construction onward. Streams:
+//   1 app   → data/logs/app-*.jsonl   (always on, LOG_LEVEL-filtered)
+//   2 state → data/logs/state-*.jsonl (always on, low-volume transition trail)
+//   3 raw   → data/mqtt-log/*.jsonl   (MQTT_LOG=1 only, high volume)
+const { appLogger, stateLogger, config: logConfig } = createRuntimeLogger({ service: "orchestrator" });
+const log = appLogger;
 
 const DB_PATH = env("DB_PATH", "./data/orchestrator.sqlite")!;
 const CACHE_DIR = env("CACHE_DIR", "./data/cache")!;

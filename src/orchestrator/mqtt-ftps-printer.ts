@@ -4,6 +4,7 @@ import { EJECT_ARTIFACT_NAME, printerUploadPath } from "../core/artifact.ts";
 import { OrchestratorMqttClient } from "./mqtt-client.ts";
 import { uploadBytes, type FtpsUploadOptions } from "./ftps-client.ts";
 import { throttleUploadProgress, type UploadProgressSample } from "./upload-progress-throttle.ts";
+import { moduleLogger } from "../obs/default-logger.ts";
 
 export interface PrintArtifact {
   bytes: Buffer;
@@ -113,10 +114,12 @@ export class MqttFtpsPrinter implements PrinterPort {
     // against real hardware. Until confirmed this is a no-op — warn loudly so a
     // runout "auto-switch" that didn't actually happen is visible in the logs,
     // not silently reported as success.
-    console.warn(
-      `[printer] resumeWithAlternateSlot(job=${jobId}, slot=${slot}) is NOT implemented ` +
-        `(spec 19 unverified MQTT command) — the print will stay paused on the printer`,
-    );
+    moduleLogger("printer").warn("resumeWithAlternateSlot is NOT implemented — print stays paused", {
+      event: "printer_resume_unimplemented",
+      jobId,
+      slot,
+      reason: "spec 19 unverified MQTT command",
+    });
   }
 
   /** FTPS-upload the artifact to the printer cache. Protected so tests can
