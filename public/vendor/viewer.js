@@ -1,22 +1,77 @@
-// 3D preview viewer (spec 17 §9 / MVP #6). Loads the merged mesh from
-// GET /api/queue/:id/model into a Three.js scene with custom pointer-drag
-// rotation + wheel zoom (no OrbitControls addon needed). Progressive: if WebGL
-// or the fetch fails, the container's fallback <img> thumbnail stays visible.
+// 3D preview viewer (spec 17 §9 / MVP #6 + task #23 per-plate mesh). Loads a
+// mesh into a Three.js scene with custom pointer-drag rotation + wheel zoom (no
+// OrbitControls addon needed). Progressive: if WebGL or the fetch fails, the
+// container's fallback <img> thumbnail stays visible.
+//
+// Two sources:
+//   • data-model-url         → GET /api/queue/:id/model    (whole-archive soup)
+//   • data-plate-mesh (base) → GET /api/plate-mesh?job=:id&plate=plate_N
+// When data-plate-mesh is present (multi-plate upload) the viewer renders the
+// ACTUAL selected plate and reloads whenever the plate radio changes, falling
+// back to the whole-archive /model and then the thumbnail. The mesh JSON is
+// { positions:number[], indices:number[], bbox?, groups? } — coloring (groups →
+// filament colour) is a later stage; here a single neutral material is used.
 //
 // Vendored Three.js (no CDN — LAN/tailnet self-hosted). `three` is resolved by
 // the import map in the page head to /vendor/three.module.min.js.
 import * as THREE from "three";
 
+/** URL of the selected plate's mesh, or null when this isn't a plate viewer. */
+function plateUrl(el) {
+  const base = el.getAttribute("data-plate-mesh");
+  if (!base) return null;
+  const modal = el.closest(".modal-box") || el.parentElement;
+  const checked = modal && modal.querySelector('input[name="plate"]:checked');
+  if (!checked || !checked.value) return null;
+  return base + "&plate=" + encodeURIComponent(checked.value);
+}
+
 function initOne(el) {
   el.dataset.ready = "1";
-  const url = el.getAttribute("data-model-url");
-  if (!url || !window.WebGLRenderingContext) return; // keep the fallback img
+  if (!window.WebGLRenderingContext) return; // keep the fallback img
 
-  fetch(url)
-    .then((r) => (r.ok ? r.json() : Promise.reject(new Error("no model"))))
-    .then((mesh) => mount(el, mesh))
+  // Multi-plate upload: reload the mesh whenever the chosen plate changes.
+  if (el.getAttribute("data-plate-mesh")) {
+    const modal = el.closest(".modal-box") || el.parentElement;
+    if (modal) {
+      modal
+        .querySelectorAll('input[name="plate"]')
+        .forEach((r) => r.addEventListener("change", () => load(el)));
+    }
+  }
+  load(el);
+}
+
+function fetchMesh(url) {
+  return fetch(url).then((r) => (r.ok ? r.json() : Promise.reject(new Error("no model"))));
+}
+function hasGeometry(mesh) {
+  return !!mesh && (mesh.positions || []).length > 0 && (mesh.indices || []).length > 0;
+}
+
+/** Fetch the current mesh (plate mesh when a plate is selected, else the whole
+ *  model) and mount it. On failure keep whatever is shown (canvas or thumbnail);
+ *  a failed plate mesh falls back to the whole-archive /model. */
+function load(el) {
+  const pUrl = plateUrl(el);
+  const modelUrl = el.getAttribute("data-model-url");
+  const primary = pUrl || modelUrl;
+  if (!primary) return;
+  fetchMesh(primary)
+    .then((mesh) => {
+      if (hasGeometry(mesh)) mount(el, mesh);
+    })
     .catch(() => {
-      /* leave the fallback thumbnail in place */
+      if (pUrl && modelUrl) {
+        fetchMesh(modelUrl)
+          .then((mesh) => {
+            if (hasGeometry(mesh)) mount(el, mesh);
+          })
+          .catch(() => {
+            /* leave the fallback thumbnail in place */
+          });
+      }
+      /* else: leave the fallback thumbnail in place */
     });
 }
 
@@ -27,6 +82,17 @@ function mount(el, data) {
 
   const width = el.clientWidth || 400;
   const height = el.clientHeight || 260;
+
+  // Dispose any previous scene (plate switch re-mounts into the same container).
+  if (el.__renderer) {
+    try {
+      el.__renderer.dispose();
+      el.__renderer.forceContextLoss();
+    } catch {
+      /* ignore */
+    }
+    el.__renderer = null;
+  }
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xf6f7f9);
@@ -73,6 +139,7 @@ function mount(el, data) {
   el.innerHTML = "";
   el.appendChild(renderer.domElement);
   el.classList.add("viewer-live");
+  el.__renderer = renderer;
 
   function render() {
     camera.position.z = dist;

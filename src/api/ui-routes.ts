@@ -363,12 +363,17 @@ function parseMapping(json: string | null): number[] {
   return out;
 }
 
-/** A 3D preview container (spec 17 §9). viewer.js loads /model into a Three.js
- *  canvas here; until then / on failure the fallback thumbnail <img> shows. */
-function renderViewer(jobId: number, colorHex?: string): Html {
+/** A 3D preview container (spec 17 §9). viewer.js loads the mesh into a Three.js
+ *  canvas here; until then / on failure the fallback thumbnail <img> shows.
+ *  When `plateMesh` is set (multi-plate upload, task #23) the viewer renders the
+ *  ACTUAL selected plate's geometry via /api/plate-mesh and re-loads whenever the
+ *  plate radio changes; it still falls back to the whole-archive /model and then
+ *  the thumbnail. Single-plate uploads keep the plain /model behaviour. */
+function renderViewer(jobId: number, colorHex?: string, plateMesh = false): Html {
   const color = colorHex && safeHex(colorHex) ? colorHex : "#4b9fea";
+  const plateAttr = plateMesh ? html` data-plate-mesh="/api/plate-mesh?job=${jobId}"` : "";
   return html`
-    <div class="viewer" data-model-url="/api/queue/${jobId}/model" data-color="${color}">
+    <div class="viewer" data-model-url="/api/queue/${jobId}/model" data-color="${color}"${plateAttr}>
       <img class="viewer-fallback" src="/api/queue/${jobId}/thumbnail" alt="" data-onerror="remove" />
     </div>
   `;
@@ -455,7 +460,7 @@ function renderConfirmPanel(job: JobRow | null, projects: ProjectRow[] = [], pla
       <div class="modal-box"${MODAL_BOX_A11Y}>
         <h2 class="modal-title">フィラメント確認</h2>
         <p class="muted">${job.filename}</p>
-        ${renderViewer(job.id, filaments[0]?.color)}
+        ${renderViewer(job.id, filaments[0]?.color, plates.length > 1)}
         ${plates.length > 1 ? renderPlateSelect(plates, job.selected_plate) : ""}
         <div class="fil-list">${rows}</div>
         <label class="proj-assign">プロジェクト
