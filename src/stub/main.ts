@@ -29,7 +29,10 @@ const printer = new VirtualPrinter(
   INITIAL_TRAYS,
 );
 
-const mqtt = new StubMqttServer(printer, { port: MQTT_PORT, certDir: CERT_DIR });
+// Enforce the access code on MQTT too (the FTPS stub already does), so the
+// running stub authenticates like a real A1 mini and `bun run diag` (spec 20.7)
+// exercises a meaningful mqtt_auth_ok against it.
+const mqtt = new StubMqttServer(printer, { port: MQTT_PORT, certDir: CERT_DIR, accessCode: ACCESS_CODE });
 const ftps = new StubFtpsServer({ certDir: CERT_DIR, accessCode: ACCESS_CODE, uploadDir: UPLOAD_DIR });
 let mqttReachable = false;
 let ftpsReachable = false;

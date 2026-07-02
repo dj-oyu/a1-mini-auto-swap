@@ -23,6 +23,7 @@ bun run certs        # 初回のみ: スタブ用の自己署名証明書を cer
 | `bun run stub` | 仮想プリンター起動（MQTT/TLS :8883、implicit FTPS :990、`__control` API :3001） |
 | `bun run dev:ui` | UI開発ハーネス（シード済み in-memory DB で API+UI を配信。実機・ブローカー不要） |
 | `bun run start` | 本番オーケストレーター（`.env` の接続先プリンター/Mosquitto が必要） |
+| `bun run diag` | 疎通診断（spec 20.7）。`.env` の `PRINTER_*`（無ければ `STUB_*`）宛にMQTT/FTPS到達性・認証・PROTモードを検査し表を出力。全pass=exit 0 / 失敗=exit 1 |
 | `bun test` | 全テスト（`test/phase2` の意図的RED も含む） |
 | `bun run test:ci` | **CIと同じ緑ゲート**（`test/stub` `test/verify` `test/db` `test/orchestrator` `test/core` `test/injection` `test/api` `test/dev`） |
 | `bun run test:e2e` | Playwright ブラウザE2E（28本、dev harness を自動起動）。初回は `bunx playwright install chromium` |
@@ -95,4 +96,4 @@ arm64 Linux 上で Bun プロセスとして常駐させる（Docker不使用）
 - **FTPS 990 / MQTT 8883 で権限エラー** → 特権ポート。`.env` で `STUB_FTPS_PORT` 等を高位ポートへ
 - **`bun run test:e2e` が起動しない** → `bunx playwright install chromium` 済みか確認
 - **`bun test` で RED がある** → `test/phase2/` の意図的REDは正常（CIゲートは `test:ci`）
-- **実機接続の切り分け** → スタブと実機の両方に使える診断（spec 20.7 `GET /api/diagnostics`）は未実装のTODO。まずは MQTT 8883 / FTPS 990 への到達性と Developer Mode 有効化を確認
+- **実機接続の切り分け** → スタブと実機の両方に使える診断（spec 20.7）を使う。`bun run diag`（CLI、表出力）または `GET /api/diagnostics`（JSON）で、MQTT/FTPS到達性・MQTT認証・reportの受信・FTPSログイン・PROTモード（P/C/none）を一括チェックできる。実機移行時はまずこれを緑にする
