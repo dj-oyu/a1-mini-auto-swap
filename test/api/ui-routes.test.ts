@@ -180,6 +180,22 @@ describe("GET / (dashboard SSR)", () => {
       const r = await body();
       expect(r.text).not.toContain(`data-abort="${id}"`);
     });
+
+    test("reorderable cards get ↑/↓; printing/terminal do not; client wires reorder", async () => {
+      const q = repo.createJob({ filename: "q.3mf" });
+      repo.updateStatus(q, "queued");
+      const printing = repo.createJob({ filename: "p.3mf" });
+      repo.updateStatus(printing, "printing");
+      const done = repo.createJob({ filename: "d.3mf" });
+      repo.updateStatus(done, "success");
+
+      const r = await body();
+      expect(r.text).toContain(`data-move-up="${q}"`);
+      expect(r.text).toContain(`data-move-down="${q}"`);
+      expect(r.text).not.toContain(`data-move-up="${printing}"`);
+      expect(r.text).not.toContain(`data-move-up="${done}"`);
+      expect(r.text).toContain("/api/queue/reorder");
+    });
   });
 
   describe("thumbnails (MVP #6)", () => {

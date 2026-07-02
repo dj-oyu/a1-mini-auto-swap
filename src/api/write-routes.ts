@@ -149,6 +149,29 @@ export function createWriteApp(deps: { repo: Repo; dispatcher: Dispatcher }): Ho
     return c.json({ requeued });
   });
 
+  // PATCH /api/queue/reorder — spec ch8: set the queue order. Body { order:
+  // number[] } lists all job ids in the desired order; positions become 1..N.
+  app.patch("/api/queue/reorder", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { order?: unknown };
+    const order = body.order;
+    if (
+      !Array.isArray(order) ||
+      order.length === 0 ||
+      !order.every((n) => Number.isInteger(n) && (n as number) > 0)
+    ) {
+      return c.json({ error: "order must be a non-empty array of job ids" }, 400);
+    }
+    const ids = order as number[];
+    if (new Set(ids).size !== ids.length) {
+      return c.json({ error: "order must not contain duplicate ids" }, 400);
+    }
+    if (ids.some((id) => !repo.getJob(id))) {
+      return c.json({ error: "order references a nonexistent job" }, 400);
+    }
+    repo.reorderJobs(ids);
+    return c.json({ ok: true });
+  });
+
   // POST /api/queue/:id/abort — spec ch8/19: stop the running plate (eject/reset,
   // swap, auto-advance). 409 if the job isn't currently printing.
   app.post("/api/queue/:id/abort", async (c) => {

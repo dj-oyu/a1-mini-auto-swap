@@ -277,6 +277,40 @@ describe("DELETE /api/queue/:id", () => {
   });
 });
 
+describe("PATCH /api/queue/reorder (spec ch8)", () => {
+  const reorder = (order: unknown) =>
+    app.request("/api/queue/reorder", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ order }),
+    });
+
+  test("reorders the queue by the given id order", async () => {
+    const a = repo.createJob({ filename: "a.3mf" });
+    const b = repo.createJob({ filename: "b.3mf" });
+    const c = repo.createJob({ filename: "c.3mf" });
+    const res = await reorder([c, a, b]);
+    expect(res.status).toBe(200);
+    expect(repo.listJobs().map((j) => j.id)).toEqual([c, a, b]);
+  });
+
+  test("400s for a non-array / empty / non-integer order", async () => {
+    for (const bad of [undefined, [], "nope", [1, 2.5], [1, -1]]) {
+      expect((await reorder(bad)).status).toBe(400);
+    }
+  });
+
+  test("400s for duplicate ids", async () => {
+    const a = repo.createJob({ filename: "a.3mf" });
+    expect((await reorder([a, a])).status).toBe(400);
+  });
+
+  test("400s when an id doesn't exist", async () => {
+    const a = repo.createJob({ filename: "a.3mf" });
+    expect((await reorder([a, 999999])).status).toBe(400);
+  });
+});
+
 describe("POST /api/queue/:id/abort (spec ch8/19)", () => {
   test("aborts a printing job (aborted:true, status aborted)", async () => {
     repo.setStocker(10, 10);

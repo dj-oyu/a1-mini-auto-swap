@@ -133,3 +133,19 @@ describe("Repo — pending actions", () => {
     ).toThrow();
   });
 });
+
+describe("Repo — reorderJobs (spec ch8)", () => {
+  test("assigns positions 1..N in the given id order", () => {
+    const a = repo.createJob({ filename: "a.3mf" });
+    const b = repo.createJob({ filename: "b.3mf" });
+    const c = repo.createJob({ filename: "c.3mf" });
+
+    repo.reorderJobs([c, a, b]);
+
+    expect(repo.getJob(c)!.position).toBe(1);
+    expect(repo.getJob(a)!.position).toBe(2);
+    expect(repo.getJob(b)!.position).toBe(3);
+    // listJobs (ORDER BY position) now reflects the new order
+    expect(repo.listJobs().map((j) => j.id)).toEqual([c, a, b]);
+  });
+});
