@@ -117,6 +117,24 @@ Windows ラップトップ上のオーケストレーター/診断から実 A1 m
   EPSV→PASV 自動フォールバックで対応。
 - 実機の制御応答はテキスト部が空（`226 `、`502 ` 等）。パーサはコード+空白のみで解釈すること。
 
+### カメラ（port 6000 独自プロトコル、実測 2026-07-02）
+- A1/P1 系のチャンバーカメラは **TLS(自己署名) port 6000**。X1 系の RTSPS(322) とは別方式。
+- **認証**: 接続直後に 80 バイトのパケットを1回送る —
+  ヘッダ16B（u32 LE で `0x40, 0x3000, 0, 0`）+ ユーザー名32B(`bblp`, NUL埋め) + アクセスコード32B(NUL埋め)。
+- **フレーム**: 16Bヘッダ（先頭4B = ペイロードサイズ u32 LE。実測ヘッダ例
+  `cac10300 00000000 01000000 00000000`）+ JPEG本体（`FFD8…FFD9`）。
+- 実測: 初回フレームまで約3.1秒、1080p で約246KB、約1fps。**Bun の TLS 受信方向は問題なし**
+  （FTPS の LIST と同様）。実装: `src/orchestrator/camera.ts`（オンデマンド接続+短TTLキャッシュ。
+  常時接続はカメラスロットを占有し Bambu Studio のライブビューと競合するため避ける）。
+
+### 印刷開始まわりのファーム挙動（実測 2026-07-02）
+- `project_file` 受理後、**G-code に加熱命令が無くてもファームが自発的にノズル target 75℃ を設定**
+  する（スタートルーチンの一部。ベッドは加熱されない）。FINISH 後も target が残る。
+  ドライリハーサル（無加熱G-code）でノズルが 75℃ になるのは正常であり、こちらの注入ミスではない。
+- 実測で受理された `project_file` の形は explicit フィールド込み（subtask_name / timelapse /
+  bed_leveling / flow_cali / vibration_cali / layer_inspect）。`subtask_name` は指定した値が
+  そのまま report に echo される（monitor 相関キーとして利用）。
+
 ### MQTT / report
 - `pushall` でフルダンプ取得可。`tray_color` は **"RRGGBBAA"**（`FFFFFFFF` 等、'#'なし・α付き）
   — `src/core/color.ts` の正規化対象そのもの。
