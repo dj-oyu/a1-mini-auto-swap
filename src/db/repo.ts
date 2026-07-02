@@ -111,6 +111,15 @@ export class Repo implements QueueStore {
         id,
       );
   }
+  // Multi-plate 3mf upload (plate-selection): record which Metadata/plate_N.gcode
+  // the confirm step chose. Separate from setFilamentPlan (whose signature is
+  // unchanged/relied on elsewhere) — called alongside it from the same PATCH
+  // /api/queue/:id/filaments handler. null clears back to auto-discovery.
+  setSelectedPlate(id: number, plate: string | null): void {
+    this.db
+      .query("UPDATE jobs SET selected_plate=?, updated_at=datetime('now') WHERE id=?")
+      .run(plate, id);
+  }
   // spec ch8: reorder the queue (PATCH /api/queue/reorder). Assigns position by
   // the given id order (1..N) in one transaction. Ids not listed keep their old
   // position (callers pass the full display order to avoid ties).

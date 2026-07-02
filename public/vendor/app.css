@@ -73,6 +73,11 @@
   .fil-row{display:flex;gap:10px;align-items:center}
   .fil-slot{min-width:84px}
   .fil-row select{margin-left:auto;font:inherit;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:#fff}
+  .plate-select{margin:0 0 14px}
+  .plate-list{display:flex;flex-wrap:wrap;gap:8px}
+  .plate-opt{display:flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;cursor:pointer;font-size:13px}
+  .plate-opt:has(input:checked){border-color:var(--blue);background:#eef4fd}
+  .plate-eta{color:var(--muted);font-size:12px}
   .proj-assign{display:flex;gap:10px;align-items:center;margin:0 0 14px;font-size:14px}
   .proj-assign select{margin-left:auto;font:inherit;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:#fff}
   .modal-actions{display:flex;gap:8px;justify-content:flex-end}

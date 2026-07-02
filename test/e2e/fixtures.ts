@@ -53,3 +53,26 @@ export function validThreemf(): Buffer {
 export function invalidThreemf(): Buffer {
   return Buffer.from("this is definitely not a 3mf zip archive");
 }
+
+/** A .gcode.3mf carrying TWO plates (an "export all plates" project) — the
+ *  confirm modal must offer a plate picker instead of auto-selecting one. */
+export function multiPlateThreemf(): Buffer {
+  const settings = JSON.stringify({
+    filament_colour: ["#ff0000"],
+    filament_type: ["PLA"],
+  });
+  const model = `<model><resources><object id="1"><mesh>
+    <vertices><vertex x="0" y="0" z="0"/><vertex x="10" y="0" z="0"/><vertex x="0" y="10" z="0"/><vertex x="0" y="0" z="10"/></vertices>
+    <triangles><triangle v1="0" v2="1" v3="2"/><triangle v1="0" v2="1" v3="3"/><triangle v1="1" v2="2" v3="3"/><triangle v1="0" v2="2" v3="3"/></triangles>
+  </mesh></object></resources><build><item objectid="1"/></build></model>`;
+  return Buffer.from(
+    zipSync({
+      "Metadata/plate_1.gcode": strToU8(PLATE_GCODE),
+      "Metadata/plate_1.json": strToU8(JSON.stringify({ prediction: 3600 })),
+      "Metadata/plate_2.gcode": strToU8(PLATE_GCODE),
+      "Metadata/plate_2.json": strToU8(JSON.stringify({ prediction: 1800 })),
+      "Metadata/project_settings.config": strToU8(settings),
+      "3D/3dmodel.model": strToU8(model),
+    }),
+  );
+}

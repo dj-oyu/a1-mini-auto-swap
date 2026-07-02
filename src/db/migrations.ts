@@ -74,6 +74,17 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_pending_unresolved ON pending_actions(resolved_at, project_id, type);
     `,
   },
+  {
+    // Multi-plate 3mf upload (plate-selection): which Metadata/plate_N.gcode to
+    // print, when the uploaded archive carries more than one. NULL = unset
+    // (injectIntoThreemf falls back to its existing single-plate auto-discovery,
+    // src/injection/threemf.ts). Append-only — 0001_init is never edited.
+    id: "0002_selected_plate",
+    up: `
+      ALTER TABLE jobs ADD COLUMN selected_plate TEXT
+        CHECK (selected_plate IS NULL OR selected_plate GLOB 'plate_[0-9]*');
+    `,
+  },
 ];
 
 /** Apply pending migrations in order. Idempotent. Returns the ids applied. */

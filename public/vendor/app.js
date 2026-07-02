@@ -240,6 +240,10 @@
       var payload = { ams_mapping: map };
       var proj = box.querySelector('[data-project]');
       if (proj) payload.project_id = proj.value === '' ? null : Number(proj.value);
+      // multi-plate 3mf upload: which Metadata/plate_N.gcode to print (only
+      // present when the archive had more than one plate — see renderPlateSelect)
+      var plateInput = box.querySelector('input[name="plate"]:checked');
+      if (plateInput) payload.selected_plate = plateInput.value;
       btn.disabled = true;
       fetch('/api/queue/' + id + '/filaments', {
         method: 'PATCH',

@@ -1,8 +1,12 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import { html, raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
 import { projectRemainingSec } from "../core/eta.ts";
+import { cacheFileName } from "../core/artifact.ts";
+import { listPlates, type PlateInfo } from "../injection/threemf.ts";
 import type { Repo } from "../db/repo.ts";
 
 // Re-exported for existing consumers/tests; the ETA aggregation rule itself
@@ -36,8 +40,23 @@ type Html = HtmlEscapedString | Promise<HtmlEscapedString>;
  * Returned as a Hono app so it mounts alongside the JSON API and is testable via
  * `app.request("/")` with no server/port.
  */
-export function createUiApp(repo: Repo): Hono {
+export function createUiApp(deps: { repo: Repo; cacheDir: string }): Hono {
+  const { repo, cacheDir } = deps;
   const app = new Hono();
+
+  // Multi-plate 3mf upload (plate-selection): read the cached archive's plate
+  // list for the confirm modal. Best-effort — a missing/corrupt cache file (or
+  // a job whose upload predates this cache dir) just yields no picker, same as
+  // any other single-plate archive. Never throws into the route.
+  const readCachedPlates = (jobId: number): PlateInfo[] => {
+    try {
+      const path = join(cacheDir, cacheFileName(jobId));
+      if (!existsSync(path)) return [];
+      return listPlates(readFileSync(path));
+    } catch {
+      return [];
+    }
+  };
 
   const snapshot = () => ({
     jobs: repo.listJobs(),
@@ -83,7 +102,8 @@ export function createUiApp(repo: Repo): Hono {
   app.get("/ui/queue/:id/confirm", (c) => {
     const id = Number(c.req.param("id"));
     const job = Number.isInteger(id) && id > 0 ? repo.getJob(id) : null;
-    return c.html(renderConfirmPanel(job, repo.listProjects()));
+    const plates = job ? readCachedPlates(job.id) : [];
+    return c.html(renderConfirmPanel(job, repo.listProjects(), plates));
   });
 
   // GET /ui/stocker/config — the stocker capacity config modal (spec 11).
@@ -362,11 +382,41 @@ function swatchDot(color: string): Html {
   return html`<span class="swatch" style="${style}"></span>`;
 }
 
+/** Plate-selection section (multi-plate 3mf upload): only rendered when the
+ *  archive carries more than one Metadata/plate_N.gcode — a single-plate
+ *  upload keeps behaving exactly as before (no picker, auto-discovery at
+ *  dispatch time). Labeled radios, not thumbnails: not every plate of a
+ *  multi-plate export carries its own embedded PNG, so this leans on the
+ *  plate id + a static per-plate time estimate when available (listPlates).
+ *  A live per-plate 3D preview is a follow-up (needs its own mesh extraction);
+ *  the existing viewer above still shows the archive's overall model.
+ *  Deliberately worded to not be confused with the filament list below, which
+ *  is project-wide (spec: parseFilaments reads project_settings.config, not
+ *  any one plate). */
+function renderPlateSelect(plates: PlateInfo[], selected: string | null): Html {
+  const chosen = selected != null && plates.some((p) => p.plate === selected) ? selected : plates[0]!.plate;
+  const opts = plates.map(
+    (p) => html`
+      <label class="plate-opt">
+        <input type="radio" name="plate" data-plate="${p.plate}" value="${p.plate}" ${p.plate === chosen ? "checked" : ""} />
+        <span class="plate-label">${p.plate}</span>
+        ${p.estimatedSeconds != null ? html`<span class="plate-eta">${fmtDuration(p.estimatedSeconds)}</span>` : ""}
+      </label>
+    `,
+  );
+  return html`
+    <div class="plate-select">
+      <p class="muted">印刷対象プレート（このプロジェクトの3mfに複数プレートが含まれています。印刷するプレートを1枚選んでください。下のフィラメント一覧はプロジェクト全体の設定です）</p>
+      <div class="plate-list">${opts}</div>
+    </div>
+  `;
+}
+
 /** The filament-confirm modal (spec 17 §6): per-slot color swatch + an AMS tray
  *  dropdown. Submitting PATCHes /api/queue/:id/filaments (client-side, see
  *  LIVE_SCRIPT) and moves the job processing→queued. The last line of defense
  *  against a wrong mapping, so it leans on color, not just text. */
-function renderConfirmPanel(job: JobRow | null, projects: ProjectRow[] = []): Html {
+function renderConfirmPanel(job: JobRow | null, projects: ProjectRow[] = [], plates: PlateInfo[] = []): Html {
   if (!job) {
     return html`<div class="modal-overlay" data-close><div class="modal-box"${MODAL_BOX_A11Y}>ジョブが見つかりません。<div class="modal-actions"><button class="act" data-close>閉じる</button></div></div></div>`;
   }
@@ -406,6 +456,7 @@ function renderConfirmPanel(job: JobRow | null, projects: ProjectRow[] = []): Ht
         <h2 class="modal-title">フィラメント確認</h2>
         <p class="muted">${job.filename}</p>
         ${renderViewer(job.id, filaments[0]?.color)}
+        ${plates.length > 1 ? renderPlateSelect(plates, job.selected_plate) : ""}
         <div class="fil-list">${rows}</div>
         <label class="proj-assign">プロジェクト
           <select data-project>${projectOpts}</select>

@@ -11,7 +11,7 @@ let app: Hono;
 beforeEach(() => {
   dbh = openDb(":memory:");
   repo = dbh.repo;
-  app = createUiApp(repo);
+  app = createUiApp({ repo, cacheDir: "/nonexistent-ui-projects-cache" });
 });
 
 const form = (path: string, body: string) =>

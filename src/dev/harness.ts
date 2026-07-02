@@ -113,7 +113,7 @@ class DevCameraRelay implements FrameRelay {
 const cameraRelay = new DevCameraRelay();
 app.route("/", createSnapshotApp({ source: relaySnapshotSource(cameraRelay) }));
 app.route("/", createCameraApp({ relay: cameraRelay }));
-app.route("/", createUiApp(repo));
+app.route("/", createUiApp({ repo, cacheDir }));
 // 実機検証ガイド (/verify): fake deps that succeed immediately, so the whole page
 // works with no printer/broker. runDiagnostics reports an all-green probe with a
 // PROT C fallback (the A1's ★ unverified case); printerStatus is IDLE so the

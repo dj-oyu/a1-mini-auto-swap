@@ -1,18 +1,44 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import type { Hono } from "hono";
+import { strToU8, zipSync } from "fflate";
 import { createUiApp } from "../../src/api/ui-routes.ts";
 import { openDb, type Db } from "../../src/db/index.ts";
 import type { Repo } from "../../src/db/repo.ts";
+import { cacheFileName } from "../../src/core/artifact.ts";
 
 let dbh: Db;
 let repo: Repo;
 let app: Hono;
+let cacheDir: string;
 
 beforeEach(() => {
   dbh = openDb(":memory:");
   repo = dbh.repo;
-  app = createUiApp(repo);
+  cacheDir = mkdtempSync(join(tmpdir(), "ui-routes-"));
+  app = createUiApp({ repo, cacheDir });
 });
+afterEach(() => rmSync(cacheDir, { recursive: true, force: true }));
+
+const PLATE_GCODE = ["; HEADER_BLOCK_START", "; name = plate_1", "; HEADER_BLOCK_END", "G28", ""].join("\n");
+
+/** Write a cached .gcode.3mf carrying the given plate gcode entries (+ optional
+ *  per-plate static estimates via Metadata/plate_N.json) so the confirm
+ *  modal's readCachedPlates() picks it up. */
+function writeCachedThreemf(id: number, plateNums: number[], estimates: Record<number, number> = {}): void {
+  const files: Record<string, Uint8Array> = {
+    "Metadata/project_settings.config": strToU8("{}"),
+  };
+  for (const n of plateNums) {
+    files[`Metadata/plate_${n}.gcode`] = strToU8(PLATE_GCODE);
+    if (estimates[n] != null) {
+      files[`Metadata/plate_${n}.json`] = strToU8(JSON.stringify({ prediction: estimates[n] }));
+    }
+  }
+  writeFileSync(join(cacheDir, cacheFileName(id)), Buffer.from(zipSync(files)));
+}
 
 async function body(path = "/"): Promise<{ status: number; type: string | null; text: string }> {
   const res = await app.request(path);
@@ -394,6 +420,57 @@ describe("GET / (dashboard SSR)", () => {
       const js = await asset("/vendor/app.js");
       expect(js).toContain("/filaments");
       expect(js).toContain("ams_mapping");
+    });
+  });
+
+  describe("plate selection (multi-plate 3mf upload)", () => {
+    test("a multi-plate archive shows a plate picker with a radio per plate", async () => {
+      const id = repo.createJob({ filename: "multi.3mf", filaments: [{ slot: 1, color: "#112233" }] });
+      writeCachedThreemf(id, [1, 24], { 1: 3600, 24: 1800 });
+
+      const res = await app.request(`/ui/queue/${id}/confirm`);
+      const text = await res.text();
+      expect(text).toContain("印刷対象プレート");
+      expect(text).toContain('data-plate="plate_1"');
+      expect(text).toContain('data-plate="plate_24"');
+      // static per-plate estimate, when the archive carries a plate_N.json
+      expect(text).toContain("1時間"); // plate_1: 3600s
+      expect(text).toContain("30分"); // plate_24: 1800s
+      // no thumbnail dependency: no per-plate thumbnail endpoint call
+      expect(text).not.toContain("thumbnail?plate=");
+      // first plate defaults checked when nothing has been selected yet
+      expect(text).toMatch(/data-plate="plate_1"[^>]*checked/);
+    });
+
+    test("a previously-selected plate stays checked", async () => {
+      const id = repo.createJob({ filename: "multi.3mf" });
+      writeCachedThreemf(id, [1, 24]);
+      repo.setSelectedPlate(id, "plate_24");
+
+      const text = await (await app.request(`/ui/queue/${id}/confirm`)).text();
+      expect(text).toMatch(/data-plate="plate_24"[^>]*checked/);
+      expect(text).not.toMatch(/data-plate="plate_1"[^>]*checked/);
+    });
+
+    test("a single-plate archive shows no plate picker (unchanged behaviour)", async () => {
+      const id = repo.createJob({ filename: "single.3mf" });
+      writeCachedThreemf(id, [1]);
+
+      const text = await (await app.request(`/ui/queue/${id}/confirm`)).text();
+      expect(text).not.toContain("印刷対象プレート");
+      expect(text).not.toContain('name="plate"');
+    });
+
+    test("no cached artifact at all also shows no plate picker", async () => {
+      const id = repo.createJob({ filename: "nocache.3mf" }); // nothing written to cacheDir
+      const text = await (await app.request(`/ui/queue/${id}/confirm`)).text();
+      expect(text).not.toContain("印刷対象プレート");
+    });
+
+    test("the client submits the checked plate as selected_plate", async () => {
+      const js = await asset("/vendor/app.js");
+      expect(js).toContain("selected_plate");
+      expect(js).toContain('input[name="plate"]:checked');
     });
   });
 
