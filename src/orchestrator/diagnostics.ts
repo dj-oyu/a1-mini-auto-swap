@@ -1,7 +1,8 @@
 import net from "node:net";
 import mqtt from "mqtt";
-import { Client as FtpClient, FTPError } from "basic-ftp";
+import { type Client as FtpClient, FTPError } from "basic-ftp";
 import { reportTopic, requestTopic } from "../protocol/topics.ts";
+import { withFtpsSession } from "./ftps-session.ts";
 
 /**
  * Connectivity diagnostics (spec 20.7): a single, side-effect-free probe that
@@ -189,23 +190,25 @@ interface FtpsCheck {
 }
 
 async function checkFtps(cfg: Required<DiagnosticsOptions>): Promise<FtpsCheck> {
-  const client = new FtpClient(cfg.timeoutMs);
+  // All printer FTPS I/O goes through the central session manager
+  // (ftps-session.ts): serialized process-wide and always QUIT-terminated —
+  // 実測 2026-07-02: QUIT releases the A1's single session slot immediately,
+  // while an abrupt close blocks the next connection for 1-3 min.
   try {
-    await client.access({
-      host: cfg.host,
-      port: cfg.ftpsPort,
-      user: cfg.username,
-      password: cfg.accessCode,
-      secure: "implicit",
-      secureOptions: { rejectUnauthorized: false },
-    });
-    // Logged in. Now probe which data-channel protection the server grants.
-    const { mode, detail } = await probeProt(client);
-    // Polite QUIT before close: the real A1 holds an abruptly-destroyed
-    // session's slot for ~1-2 min, blocking the next FTPS connection
-    // (実測 2026-07-02 — this is what wedged Stage 5 after running Stage 1-3).
-    await client.send("QUIT").catch(() => {});
-    return { authOk: true, protMode: mode, protDetail: detail };
+    return await withFtpsSession(
+      {
+        host: cfg.host,
+        port: cfg.ftpsPort,
+        accessCode: cfg.accessCode,
+        username: cfg.username,
+        timeoutMs: cfg.timeoutMs,
+      },
+      async (client) => {
+        // Logged in. Now probe which data-channel protection the server grants.
+        const { mode, detail } = await probeProt(client);
+        return { authOk: true as const, protMode: mode, protDetail: detail };
+      },
+    );
   } catch (e) {
     return {
       authOk: false,
@@ -213,8 +216,6 @@ async function checkFtps(cfg: Required<DiagnosticsOptions>): Promise<FtpsCheck> 
       protDetail: null,
       error: e instanceof FTPError ? e.message : (e as Error).message,
     };
-  } finally {
-    client.close();
   }
 }
 
