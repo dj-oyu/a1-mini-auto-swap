@@ -28,10 +28,13 @@ test.describe("plate selection — sequence builder (multi-plate 3mf upload)", (
     // static per-plate estimates are shown (no thumbnail dependency)
     await expect(modal).toContainText("1時間");
     await expect(modal).toContainText("30分");
-    // sequence is pre-populated with every plate once (ascending)
-    await expect(modal.locator("[data-seq-item]")).toHaveCount(2);
+    // the sequence starts EMPTY (build a word, don't remove rows)
+    await expect(modal.locator("[data-seq-item]")).toHaveCount(0);
 
-    // append plate_1 again → ordered sequence [plate_1, plate_2, plate_1]
+    // build the ordered sequence [plate_1, plate_2, plate_1] by clicking chips
+    // (plate_1 added twice → a repeat, like spelling B,O,B)
+    await modal.locator('[data-plate-add="plate_1"]').click();
+    await modal.locator('[data-plate-add="plate_2"]').click();
     await modal.locator('[data-plate-add="plate_1"]').click();
     await expect(modal.locator("[data-seq-item]")).toHaveCount(3);
 
