@@ -64,10 +64,30 @@ async function openAndRun<T>(
 }
 
 /** Transient connect-phase failures worth retrying: the A1's single-session
- *  FTPS server times out or refuses while it still holds a previous session. */
+ *  FTPS server times out / refuses while it still holds a previous session
+ *  (or is briefly refusing right after a printer reboot). */
 export function isTransientConnectError(e: unknown): boolean {
   const msg = e instanceof Error ? e.message : String(e);
   return /timeout|timed out|ECONNREFUSED|ECONNRESET|EHOSTUNREACH/i.test(msg);
+}
+
+/** A single ECONNREFUSED can be benign (FTPS service still booting after a
+ *  printer restart), but REPEATED refusals mean the server has wedged — 実測
+ *  2026-07-02: once it settles into refusing, only a printer reboot clears it;
+ *  further retries just hammer it. */
+export function isRefusedError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /ECONNREFUSED/i.test(msg);
+}
+
+/** Raised when the printer's FTPS server is wedged (see isWedgedError). */
+export class FtpsWedgedError extends Error {
+  constructor(cause: string) {
+    super(
+      `printer FTPS server is refusing connections (${cause}) — ` +
+        `プリンターの再起動が必要です (FTPS wedge, docs/bambu-protocol-notes.md 実機実測ノート)`,
+    );
+  }
 }
 
 export interface FtpsRetryOptions extends FtpsSessionOptions {
@@ -87,11 +107,20 @@ export async function withFtpsRetry<T>(
   const attempts = Math.max(1, opts.retries ?? 4);
   const delayMs = opts.retryDelayMs ?? 20_000;
   let lastErr: unknown;
+  let consecutiveRefused = 0;
   for (let i = 1; i <= attempts; i++) {
     try {
       return await withFtpsSession(opts, fn);
     } catch (e) {
       lastErr = e;
+      // Two refusals in a row = the server has wedged (not just booting):
+      // fail fast with an actionable message — more attempts only hammer it
+      // further and cannot succeed until the printer reboots.
+      consecutiveRefused = isRefusedError(e) ? consecutiveRefused + 1 : 0;
+      if (consecutiveRefused >= 2) {
+        console.warn(`[ftps] server keeps refusing connections — printer reboot required (giving up)`);
+        throw new FtpsWedgedError((e as Error).message);
+      }
       if (i === attempts || !isTransientConnectError(e)) throw e;
       console.warn(
         `[ftps] attempt ${i}/${attempts} failed (${(e as Error).message}); ` +
