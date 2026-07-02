@@ -1,20 +1,51 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import type { Dispatcher } from "../core/dispatcher.ts";
+import { isValidAmsMapping } from "../core/ams-mapping.ts";
 import type { Repo } from "../db/repo.ts";
-import type { ColorConsistencyPolicy } from "../db/types.ts";
 
-function isValidPolicy(v: unknown): v is ColorConsistencyPolicy {
-  return v === "strict" || v === "propagate";
-}
+// ── request-body schemas (spec ch8) ─────────────────────────────────────────
+// zod validates shape at the HTTP boundary; domain rules that also apply
+// elsewhere (ams_mapping / INV-MQTT-01) live in core and are referenced here.
 
-/** An AMS mapping is a 4-element array (one entry per print slot) whose values
- *  are tray indices 0–3, or -1 for "unused" (spec ch8/14). */
-function isValidAmsMapping(v: unknown): v is number[] {
-  return (
-    Array.isArray(v) &&
-    v.length === 4 &&
-    v.every((n) => Number.isInteger(n) && n >= -1 && n <= 3)
-  );
+const policySchema = z.enum(["strict", "propagate"]);
+
+const projectCreateSchema = z.object({
+  name: z.string().refine((s) => s.trim() !== "", "name is required"),
+  color_consistency_policy: policySchema.optional(),
+});
+
+const projectPatchSchema = z.object({
+  color_consistency_policy: policySchema,
+});
+
+const filamentsPatchSchema = z.object({
+  ams_mapping: z.custom<number[]>(isValidAmsMapping, {
+    message: "ams_mapping must be a 4-element array of -1..3",
+  }),
+  filaments: z.array(z.unknown()).optional(),
+  // undefined = leave as-is; null = unassign; number = must exist (checked vs DB below)
+  project_id: z.number().int().nullish(),
+});
+
+const reorderSchema = z.object({
+  order: z
+    .array(z.number().int().positive())
+    .nonempty()
+    .refine((a) => new Set(a).size === a.length, "order must not contain duplicate ids"),
+});
+
+type Parsed<T> = { ok: true; data: T } | { ok: false; error: string };
+
+async function parseBody<T extends z.ZodType>(
+  req: { json(): Promise<unknown> },
+  schema: T,
+): Promise<Parsed<z.infer<T>>> {
+  const raw = await req.json().catch(() => null);
+  const parsed = schema.safeParse(raw);
+  if (parsed.success) return { ok: true, data: parsed.data };
+  const issue = parsed.error.issues[0];
+  return { ok: false, error: issue ? `${issue.path.join(".") || "body"}: ${issue.message}` : "invalid request body" };
 }
 
 /** Parse a route `:id` param the same way the read routes do (spec ch8):
@@ -37,20 +68,9 @@ export function createWriteApp(deps: { repo: Repo; dispatcher: Dispatcher }): Ho
 
   // POST /api/projects — spec ch8: create a project.
   app.post("/api/projects", async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as {
-      name?: unknown;
-      color_consistency_policy?: unknown;
-    };
-    if (typeof body.name !== "string" || body.name.trim() === "") {
-      return c.json({ error: "name is required" }, 400);
-    }
-    if (body.color_consistency_policy !== undefined && !isValidPolicy(body.color_consistency_policy)) {
-      return c.json({ error: "invalid color_consistency_policy" }, 400);
-    }
-    const id = repo.createProject(
-      body.name,
-      body.color_consistency_policy as ColorConsistencyPolicy | undefined,
-    );
+    const body = await parseBody(c.req, projectCreateSchema);
+    if (!body.ok) return c.json({ error: body.error }, 400);
+    const id = repo.createProject(body.data.name, body.data.color_consistency_policy);
     return c.json({ id }, 201);
   });
 
@@ -61,11 +81,9 @@ export function createWriteApp(deps: { repo: Repo; dispatcher: Dispatcher }): Ho
     const project = repo.getProject(id);
     if (!project) return c.json({ error: "project not found" }, 404);
 
-    const body = (await c.req.json().catch(() => ({}))) as { color_consistency_policy?: unknown };
-    if (!isValidPolicy(body.color_consistency_policy)) {
-      return c.json({ error: "invalid color_consistency_policy" }, 400);
-    }
-    repo.setProjectPolicy(id, body.color_consistency_policy);
+    const body = await parseBody(c.req, projectPatchSchema);
+    if (!body.ok) return c.json({ error: body.error }, 400);
+    repo.setProjectPolicy(id, body.data.color_consistency_policy);
     return c.json(repo.getProject(id));
   });
 
@@ -104,28 +122,15 @@ export function createWriteApp(deps: { repo: Repo; dispatcher: Dispatcher }): Ho
       return c.json({ error: "filaments can only be confirmed while processing" }, 409);
     }
 
-    const body = (await c.req.json().catch(() => ({}))) as {
-      ams_mapping?: unknown;
-      filaments?: unknown;
-      project_id?: unknown;
-    };
-    if (!isValidAmsMapping(body.ams_mapping)) {
-      return c.json({ error: "ams_mapping must be a 4-element array of -1..3" }, 400);
-    }
-    if (body.filaments !== undefined && !Array.isArray(body.filaments)) {
-      return c.json({ error: "filaments must be an array when provided" }, 400);
-    }
-    // project_id: undefined = leave as-is; null = unassign; number = must exist.
-    if (
-      body.project_id !== undefined &&
-      body.project_id !== null &&
-      (!Number.isInteger(body.project_id) || !repo.getProject(body.project_id as number))
-    ) {
+    const body = await parseBody(c.req, filamentsPatchSchema);
+    if (!body.ok) return c.json({ error: body.error }, 400);
+    // project_id existence is a DB question, not a shape question — checked here.
+    if (body.data.project_id != null && !repo.getProject(body.data.project_id)) {
       return c.json({ error: "project_id must be null or an existing project id" }, 400);
     }
 
-    repo.setFilamentPlan(id, body.ams_mapping, body.filaments);
-    if (body.project_id !== undefined) repo.setProject(id, body.project_id as number | null);
+    repo.setFilamentPlan(id, body.data.ams_mapping, body.data.filaments);
+    if (body.data.project_id !== undefined) repo.setProject(id, body.data.project_id);
     await dispatcher.enqueue(id); // processing → queued (spec ch6)
     for (const a of repo.getUnresolvedPendingActions()) {
       if (a.type === "filament_confirm" && a.job_id === id) repo.resolvePendingAction(a.id);
@@ -152,19 +157,9 @@ export function createWriteApp(deps: { repo: Repo; dispatcher: Dispatcher }): Ho
   // PATCH /api/queue/reorder — spec ch8: set the queue order. Body { order:
   // number[] } lists all job ids in the desired order; positions become 1..N.
   app.patch("/api/queue/reorder", async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as { order?: unknown };
-    const order = body.order;
-    if (
-      !Array.isArray(order) ||
-      order.length === 0 ||
-      !order.every((n) => Number.isInteger(n) && (n as number) > 0)
-    ) {
-      return c.json({ error: "order must be a non-empty array of job ids" }, 400);
-    }
-    const ids = order as number[];
-    if (new Set(ids).size !== ids.length) {
-      return c.json({ error: "order must not contain duplicate ids" }, 400);
-    }
+    const body = await parseBody(c.req, reorderSchema);
+    if (!body.ok) return c.json({ error: body.error }, 400);
+    const ids = body.data.order;
     if (ids.some((id) => !repo.getJob(id))) {
       return c.json({ error: "order references a nonexistent job" }, 400);
     }

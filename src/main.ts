@@ -22,6 +22,7 @@ import { EscalationService } from "./core/escalation.ts";
 import { createOrchestrator } from "./orchestrator/orchestrator.ts";
 import { injectIntoThreemf } from "./injection/threemf.ts";
 import { systemClock, type Notifier } from "./core/ports.ts";
+import { parseAmsMapping } from "./core/ams-mapping.ts";
 
 // Orchestrator entrypoint (spec 3): wires every adapter from env config into the
 // running core loop, and serves the HTTP API. Thin — the assembly logic lives
@@ -69,7 +70,7 @@ const resolver: ArtifactResolver = (job) => {
     remoteName: `${job.id}.gcode.3mf`,
     param: "Metadata/plate_1.gcode",
     url: `ftp:///cache/${job.id}.gcode.3mf`,
-    amsMapping: JSON.parse(job.ams_mapping ?? "[-1,-1,-1,-1]") as number[],
+    amsMapping: parseAmsMapping(job.ams_mapping), // validated, throws on corrupt data (INV-MQTT-01)
   };
 };
 const printer = new MqttFtpsPrinter(
