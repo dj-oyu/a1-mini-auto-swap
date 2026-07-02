@@ -1,6 +1,5 @@
-import { strToU8, zipSync } from "fflate";
 import { buildEjectGcode } from "../core/eject-gcode.ts";
-import { gcodeMd5 } from "./md5.ts";
+import { packageGcodeThreemf } from "./gcode-threemf.ts";
 
 /**
  * Package the eject program (core/eject-gcode.ts) into a minimal `.gcode.3mf`:
@@ -13,15 +12,10 @@ import { gcodeMd5 } from "./md5.ts";
  * real machine rejects it, extend this packager rather than the callers.
  *
  * Deterministic output: the zip entries use a fixed mtime so the same snippet
- * always produces byte-identical bytes (repo決定論ルール).
+ * always produces byte-identical bytes (repo決定論ルール). Packaging itself
+ * lives in gcode-threemf.ts (shared with the dry-rehearsal 3mf CLI).
  */
 export function buildEjectThreemf(swapSequence: string, vars: Record<string, string> = {}): Buffer {
   const gcode = buildEjectGcode(swapSequence, vars);
-  const md5 = gcodeMd5(gcode);
-  const fixed = { mtime: new Date("2000-01-01T00:00:00Z") };
-  const zipped = zipSync({
-    "Metadata/plate_1.gcode": [strToU8(gcode), fixed],
-    "Metadata/plate_1.gcode.md5": [strToU8(md5 + "\n"), fixed],
-  });
-  return Buffer.from(zipped);
+  return packageGcodeThreemf(gcode);
 }
