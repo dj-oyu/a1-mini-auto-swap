@@ -76,6 +76,35 @@ ams: {
 - **bind/detect**（`bind_server.py`）: TCP **3000(平文)/3002(TLS)**。A1 Mini 01.07.x は 3002/TLS。
   応答 `{"login":{"command":"detect","bind":"free","connect":"lan","dev_cap":1,"id":,"model":,"name":,"sequence_id":3021,"version":}}`
 
+## 実機実測ノート（A1 mini + BMCU、2026-07-02 検証 Stage 1-4）
+
+Windows ラップトップ上のオーケストレーター/診断から実 A1 mini に対して確認した一次データ。
+
+### FTPS
+- **PROT P は受理される**（`PROT P → 200`）。データチャネル（LIST/STOR）も P のまま成立。
+  spec 20.6 が警戒していた「PROT C への強制フォールバック」は**この個体・FWでは観測されず**。
+  ただしスタブは引き続き P/C 両対応を維持する（FW差の可能性は残る）。
+- **セッションスロットは実質1つ**。QUIT を送らずソケットを破棄すると、プリンター側が
+  そのセッションを**1〜3分保持**し、次の接続は Timeout / ECONNREFUSED になる。
+  **QUIT を送れば即時解放**（直後の再接続が約2秒で成立、実験で確認）。
+  → 対策実装済み: `src/orchestrator/ftps-session.ts`（全FTPS I/Oを直列化＋必ずQUIT）、
+  `withFtpsRetry`（過渡失敗を20秒間隔でリトライ）。
+- 短時間に接続試行を繰り返すと FTPS サーバー自体が wedge し、ECONNREFUSED を返し続ける
+  ことがある。**プリンター再起動で回復**。連打・並行接続は構造的に避けること。
+- `/cache` には過去の印刷ファイルが大量に残留する（数十件・数百MB規模を確認）。
+
+### MQTT / report
+- `pushall` でフルダンプ取得可。`tray_color` は **"RRGGBBAA"**（`FFFFFFFF` 等、'#'なし・α付き）
+  — `src/core/color.ts` の正規化対象そのもの。
+- BMCU は AMS として見える（`ams_exist_bits:"1"`、4トレイ、`humidity:"5"`）。
+  **`remain: -1`（残量%不明）**を返す — 残量ベースの runout 検知は BMCU では
+  レポートに依存できない可能性が高い（要追加検証）。
+- **IDLE 中でも `hms` が空でないことがある**（残留エントリを確認: attr 83887104 / code 65604、
+  `print_error` も非0）。「hms非空＝異常」ではない。monitor の FAILED 判定が
+  gcode_state 駆動なのは正しい設計だった。
+- IDLE 中の `subtask_name` は**直前に印刷したジョブ名を保持し続ける**。
+  完了検知を subtask 名だけに頼ってはいけない（エッジ検出必須）。
+
 ## テスト観点（bambuddy が黙っている＝自前で担保すべき箇所）
 - 印刷進行の時間シミュレーション（本スタブ: `tick()`/`Ticker`）
 - AMS残量・色・種の可変設定と runout（本スタブ: `__control/ams`）
