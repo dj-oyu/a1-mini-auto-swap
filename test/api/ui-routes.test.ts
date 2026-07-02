@@ -334,6 +334,12 @@ describe("GET / (dashboard SSR)", () => {
       expect(text).toContain("AMS 4");
       // slot 1's stored mapping (tray index 2 → "AMS 3") is pre-selected
       expect(text).toMatch(/<option value="2" selected>AMS 3<\/option>/);
+      // each row carries its filament color for the live 3D-recolor hook
+      // (spec 17 §9: スロット変更UIから即時再着色 — app.js → viewer.__setColor)
+      expect(text).toContain('data-color="#1f77b4"');
+      expect(text).toContain('data-color="#ff7f0e"');
+      const js = await asset("/vendor/app.js");
+      expect(js).toContain("__setColor");
     });
 
     test("handles the uploader's index-based filament shape (not just slot)", async () => {
@@ -425,7 +431,10 @@ describe("GET / (dashboard SSR)", () => {
     test("the client script computes % and finish-time", async () => {
       const js = await asset("/vendor/app.js");
       expect(js).toContain("updatePrinting");
-      expect(js).toContain("toLocaleTimeString");
+      // clock formatting moved to the shared helper module (PF.fmtClock)
+      expect(js).toContain("fmtClock");
+      const shared = await asset("/vendor/shared.js");
+      expect(shared).toContain("toLocaleTimeString");
     });
 
     test("the header carries the job id and the client polls the live status", async () => {

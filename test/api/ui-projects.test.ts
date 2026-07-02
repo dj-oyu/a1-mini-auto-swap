@@ -98,11 +98,15 @@ describe("projects page", () => {
       expect(html).toContain(`data-run-id="${run}"`);
       expect(html).toContain('data-run-est="4500"');
       expect(html).toContain("完了予定");
-      // the page ships the ETA client script, which polls the live status
+      // the page ships the ETA client script + the shared helpers it uses to
+      // poll the live status (fetchPrinterStatus moved to shared.js)
       expect(html).toContain('src="/vendor/projects.js"');
+      expect(html).toContain('src="/vendor/shared.js"');
       const js = await (await app.request("/vendor/projects.js")).text();
-      expect(js).toContain("/api/printer/status");
+      expect(js).toContain("fetchPrinterStatus");
       expect(js).toContain("完了予定");
+      const shared = await (await app.request("/vendor/shared.js")).text();
+      expect(shared).toContain("/api/printer/status");
     });
   });
 
