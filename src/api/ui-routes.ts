@@ -78,7 +78,7 @@ export function createUiApp(repo: Repo): Hono {
   app.get("/ui/queue/:id/confirm", (c) => {
     const id = Number(c.req.param("id"));
     const job = Number.isInteger(id) && id > 0 ? repo.getJob(id) : null;
-    return c.html(renderConfirmPanel(job));
+    return c.html(renderConfirmPanel(job, repo.listProjects()));
   });
 
   // GET /ui/queue/:id/preview — a read-only 3D preview modal (any job), opened
@@ -312,7 +312,7 @@ function swatchDot(color: string): Html {
  *  dropdown. Submitting PATCHes /api/queue/:id/filaments (client-side, see
  *  LIVE_SCRIPT) and moves the job processing→queued. The last line of defense
  *  against a wrong mapping, so it leans on color, not just text. */
-function renderConfirmPanel(job: JobRow | null): Html {
+function renderConfirmPanel(job: JobRow | null, projects: ProjectRow[] = []): Html {
   if (!job) {
     return html`<div class="modal-overlay" data-close><div class="modal-box">ジョブが見つかりません。<div class="modal-actions"><button class="act" data-close>閉じる</button></div></div></div>`;
   }
@@ -321,6 +321,12 @@ function renderConfirmPanel(job: JobRow | null): Html {
   }
   const filaments = parseFilaments(job.filaments);
   const mapping = parseMapping(job.ams_mapping);
+  const projectOpts = [
+    html`<option value="" ${job.project_id == null ? "selected" : ""}>（プロジェクトなし）</option>`,
+    ...projects.map(
+      (p) => html`<option value="${p.id}" ${p.id === job.project_id ? "selected" : ""}>${p.name}</option>`,
+    ),
+  ];
   const rows =
     filaments.length === 0
       ? html`<p class="muted">検出されたフィラメントがありません。</p>`
@@ -347,6 +353,9 @@ function renderConfirmPanel(job: JobRow | null): Html {
         <p class="muted">${job.filename}</p>
         ${renderViewer(job.id, filaments[0]?.color)}
         <div class="fil-list">${rows}</div>
+        <label class="proj-assign">プロジェクト
+          <select data-project>${projectOpts}</select>
+        </label>
         <div class="modal-actions">
           <button class="act" data-close>キャンセル</button>
           <button class="act primary" data-confirm="${job.id}">この内容で確定</button>
@@ -701,11 +710,14 @@ const LIVE_SCRIPT = `
         var slot = Number(s.getAttribute('data-slot'));
         if (slot >= 1 && slot <= 4) map[slot - 1] = Number(s.value);
       });
+      var payload = { ams_mapping: map };
+      var proj = box.querySelector('[data-project]');
+      if (proj) payload.project_id = proj.value === '' ? null : Number(proj.value);
       btn.disabled = true;
       fetch('/api/queue/' + id + '/filaments', {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ams_mapping: map }),
+        body: JSON.stringify(payload),
       }).then(function (r) {
         btn.disabled = false;
         if (r.ok) { closeModal(); refresh(); }
@@ -843,6 +855,8 @@ const STYLES = `
   .fil-row{display:flex;gap:10px;align-items:center}
   .fil-slot{min-width:84px}
   .fil-row select{margin-left:auto;font:inherit;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:#fff}
+  .proj-assign{display:flex;gap:10px;align-items:center;margin:0 0 14px;font-size:14px}
+  .proj-assign select{margin-left:auto;font:inherit;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:#fff}
   .modal-actions{display:flex;gap:8px;justify-content:flex-end}
   .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:60;max-width:90vw;
     padding:12px 18px;border-radius:10px;background:#7c4a03;color:#fff;font-weight:600;cursor:pointer;

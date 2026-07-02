@@ -318,6 +318,19 @@ describe("GET / (dashboard SSR)", () => {
       expect(text).toContain("#ff0000");
     });
 
+    test("the confirm panel offers a project assignment select", async () => {
+      const fleet = repo.createProject("Benchy Fleet");
+      repo.createProject("Gridfinity");
+      const id = repo.createJob({ filename: "p.3mf", project_id: fleet });
+      const text = await (await app.request(`/ui/queue/${id}/confirm`)).text();
+      expect(text).toContain("data-project");
+      expect(text).toContain("（プロジェクトなし）");
+      expect(text).toContain("Benchy Fleet");
+      expect(text).toContain("Gridfinity");
+      // the job's current project is pre-selected
+      expect(text).toMatch(new RegExp(`<option value="${fleet}" selected>Benchy Fleet</option>`));
+    });
+
     test("confirming a non-processing job is refused in the panel", async () => {
       const id = repo.createJob({ filename: "x.3mf" });
       repo.updateStatus(id, "printing");

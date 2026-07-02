@@ -345,6 +345,32 @@ describe("PATCH /api/queue/:id/filaments (spec ch8)", () => {
     expect(repo.getUnresolvedPendingActions().some((a) => a.id === pid)).toBe(false);
   });
 
+  test("assigns the job to a project when project_id is given", async () => {
+    const proj = repo.createProject("Fleet");
+    const id = repo.createJob({ filename: "p.3mf" });
+    const res = await patch(id, { ams_mapping: [0, -1, -1, -1], project_id: proj });
+    expect(res.status).toBe(200);
+    expect(repo.getJob(id)?.project_id).toBe(proj);
+  });
+
+  test("project_id:null unassigns; omitting it leaves the assignment alone", async () => {
+    const proj = repo.createProject("Fleet");
+    const id = repo.createJob({ filename: "p.3mf", project_id: proj });
+    await patch(id, { ams_mapping: [0, -1, -1, -1] }); // omit → unchanged
+    expect(repo.getJob(id)?.project_id).toBe(proj);
+
+    const id2 = repo.createJob({ filename: "q.3mf", project_id: proj });
+    await patch(id2, { ams_mapping: [0, -1, -1, -1], project_id: null });
+    expect(repo.getJob(id2)?.project_id).toBeNull();
+  });
+
+  test("400s for a non-existent project_id (job left unconfirmed)", async () => {
+    const id = repo.createJob({ filename: "p.3mf" });
+    const res = await patch(id, { ams_mapping: [0, -1, -1, -1], project_id: 999999 });
+    expect(res.status).toBe(400);
+    expect(repo.getJob(id)?.status).toBe("processing");
+  });
+
   test("409s when the job is not processing (already queued/printing/etc.)", async () => {
     const id = repo.createJob({ filename: "p.3mf" });
     repo.updateStatus(id, "queued");
