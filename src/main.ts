@@ -218,7 +218,13 @@ app.route(
 );
 app.route("/", createEventsApp(sse)); // GET /events → SSE live updates (spec 17)
 
-const server = Bun.serve({ port: HTTP_PORT, fetch: app.fetch });
+// idleTimeout 0: Bun's 10s default kills (a) SSE /events streams and (b) slow
+// responses like the verify dry-run, whose FTPS upload may retry for 60s+
+// while the printer releases its session slot (実測 2026-07-02 — the request
+// died at 10s while the upload retry was still working, so the UI showed an
+// error although the print then started). The dev harness already runs with
+// idleTimeout: 0 for the same reason.
+const server = Bun.serve({ port: HTTP_PORT, idleTimeout: 0, fetch: app.fetch });
 console.log(`orchestrator up`);
 console.log(`  printer   mqtts://${PRINTER_HOST}:${PRINTER_MQTT_PORT} (serial ${PRINTER_SERIAL})`);
 console.log(gateway ? `  gateway   ${MOSQUITTO_URL} → printfarm/*` : `  gateway   disabled (MOSQUITTO_URL unset)`);
