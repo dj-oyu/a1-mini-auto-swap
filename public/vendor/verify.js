@@ -7,17 +7,37 @@
 // Stage 5 passed on FINISH).
 (function () {
   // ── Stage 5: physical-safety gate ──────────────────────────────────────────
-  function updateDryButton() {
-    var boxes = document.querySelectorAll('[data-verify-safety]');
-    var all = boxes.length > 0;
+  // Base gate: all 3 general safety boxes. When the "スワップシーケンス込みで
+  // 実行" toggle is checked, two more physical confirmations (mod装着, ストッカー
+  // 供給) appear and must ALSO be checked before the run button is enabled.
+  function allChecked(selector) {
+    var boxes = document.querySelectorAll(selector);
+    if (boxes.length === 0) return false;
     for (var i = 0; i < boxes.length; i++) {
-      if (!boxes[i].checked) { all = false; break; }
+      if (!boxes[i].checked) return false;
     }
+    return true;
+  }
+  function updateDryButton() {
+    var swapToggle = document.querySelector('[data-verify-swap-toggle]');
+    var swapOn = !!(swapToggle && swapToggle.checked);
+    var extra = document.getElementById('verifySwapExtra');
+    if (extra) extra.hidden = !swapOn;
+
+    var all = allChecked('[data-verify-safety]');
+    if (swapOn) all = all && allChecked('[data-verify-swap-safety]');
+
     var btn = document.getElementById('verifyDryRun');
     if (btn) btn.disabled = !all;
   }
   document.body.addEventListener('change', function (e) {
-    if (e.target && e.target.getAttribute && e.target.getAttribute('data-verify-safety') !== null) {
+    var t = e.target;
+    if (!t || !t.getAttribute) return;
+    if (
+      t.getAttribute('data-verify-safety') !== null ||
+      t.getAttribute('data-verify-swap-safety') !== null ||
+      t.getAttribute('data-verify-swap-toggle') !== null
+    ) {
       updateDryButton();
     }
   });
@@ -37,10 +57,12 @@
       if (dry.disabled) return;
       dry.disabled = true;
       setMsg('verifyDryMsg', 'ドライリハーサルを送信中…');
+      var swapToggle = document.querySelector('[data-verify-swap-toggle]');
+      var includeSwap = !!(swapToggle && swapToggle.checked);
       fetch('/api/verify/dry-run', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ confirmed: true }),
+        body: JSON.stringify({ confirmed: true, includeSwap: includeSwap }),
       })
         .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, status: r.status, d: d }; }); })
         .then(function (res) {
