@@ -11,6 +11,7 @@ import { createModelApp } from "../api/model-routes.ts";
 import { createPrinterApp, printerStatusView, type PrinterStatusSource } from "../api/printer-routes.ts";
 import { createUiApp } from "../api/ui-routes.ts";
 import { createEventsApp } from "../api/events-routes.ts";
+import { createAuth, createLoginApp } from "../api/auth.ts";
 import { SseBroadcaster } from "../orchestrator/sse-notifier.ts";
 import { Dispatcher } from "../core/dispatcher.ts";
 import type { NotifyEvent, PrinterPort } from "../core/ports.ts";
@@ -56,6 +57,11 @@ const dispatcher = new Dispatcher(repo, noopPrinter, { notifier: sse });
 const cacheDir = mkdtempSync(join(tmpdir(), "a1-ui-dev-cache-"));
 
 const app = new Hono();
+// Opt-in auth for manual dev testing (off by default; E2E runs without it).
+if (process.env.AUTH_TOKEN) {
+  app.use("*", createAuth(process.env.AUTH_TOKEN));
+  app.route("/", createLoginApp(process.env.AUTH_TOKEN));
+}
 app.route("/", createApiApp(repo));
 app.route("/", createWriteApp({ repo, dispatcher }));
 app.route("/", createUploadApp({ repo, cacheDir }));
