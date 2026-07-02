@@ -45,6 +45,8 @@ async function openAndRun<T>(
   fn: (client: Client) => Promise<T>,
 ): Promise<T> {
   const client = new Client(opts.timeoutMs ?? 30_000);
+  const t0 = Date.now();
+  const phase = (msg: string) => console.log(`[ftps] ${msg} (+${Date.now() - t0}ms)`);
   try {
     await client.access({
       host: opts.host,
@@ -64,7 +66,13 @@ async function openAndRun<T>(
         maxVersion: "TLSv1.2",
       },
     });
-    return await fn(client);
+    // Phase logging (field triage): pinpoints WHERE a failing session dies —
+    // before connect, after login, or mid-transfer. Low volume: FTPS ops
+    // happen at plate cadence.
+    phase("session open: TLS+login ok");
+    const result = await fn(client);
+    phase("session body done");
+    return result;
   } finally {
     // Polite goodbye even when fn threw — as long as the control connection
     // is still alive. Never let the goodbye itself mask the real error.
