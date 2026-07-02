@@ -220,6 +220,26 @@ describe("POST /api/verify/eject (Stage 6)", () => {
     expect(res.status).toBe(200);
     expect(spies.ejects).toBe(1);
   });
+
+  test("409s and does NOT eject when a real queue job is printing (bypass guard)", async () => {
+    const { repo } = build();
+    let ejects = 0;
+    const app = createVerifyApp({
+      repo,
+      runDiagnostics: async () => {
+        throw new Error("unused");
+      },
+      printerStatus: () => ({ printing: true, job_id: 1, percent: 0, remaining_min: 0, gcode_state: "RUNNING" }),
+      startDryRun: async () => {},
+      eject: async () => {
+        ejects++;
+      },
+      hasPrintingJob: () => true,
+    });
+    const res = await app.request("/api/verify/eject", { method: "POST" });
+    expect(res.status).toBe(409);
+    expect(ejects).toBe(0);
+  });
 });
 
 describe("POST /ui/verify/stage/:n (manual mark + note)", () => {
