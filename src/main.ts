@@ -10,6 +10,7 @@ import { createModelApp } from "./api/model-routes.ts";
 import { createPrinterApp, printerStatusView } from "./api/printer-routes.ts";
 import { createUiApp } from "./api/ui-routes.ts";
 import { createEventsApp } from "./api/events-routes.ts";
+import { createAuth, createLoginApp } from "./api/auth.ts";
 import { SseBroadcaster } from "./orchestrator/sse-notifier.ts";
 import { OrchestratorMqttClient } from "./orchestrator/mqtt-client.ts";
 import { MqttFtpsPrinter, type ArtifactResolver } from "./orchestrator/mqtt-ftps-printer.ts";
@@ -99,6 +100,13 @@ const orch = createOrchestrator({
 mqtt.on("status", (s) => sse.sendProgress(printerStatusView(repo.listByStatus("printing")[0] ?? null, s)));
 
 const app = new Hono();
+// Opt-in fixed-token auth (spec 17). Installed before any route so it guards all
+// of them; login + /vendor/* stay open. Off entirely when AUTH_TOKEN is unset.
+const AUTH_TOKEN = env("AUTH_TOKEN");
+if (AUTH_TOKEN) {
+  app.use("*", createAuth(AUTH_TOKEN));
+  app.route("/", createLoginApp(AUTH_TOKEN));
+}
 app.route("/", createApiApp(repo));
 app.route("/", createWriteApp({ repo, dispatcher: orch.dispatcher }));
 app.route("/", createUploadApp({ repo, cacheDir: CACHE_DIR })); // POST /api/queue → cache 3mf
