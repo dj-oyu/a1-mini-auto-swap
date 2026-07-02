@@ -11,12 +11,13 @@
     "stub": "bun run src/stub/main.ts",
     "diag": "bun run scripts/diag.ts",
     "test": "bun test",
-    "test:ci": "bun test test/stub test/verify test/db test/orchestrator test/core test/injection test/api test/dev",
+    "test:ci": "bun test test/stub test/verify test/db test/orchestrator test/core test/injection test/api test/dev test/scripts",
     "test:stub": "bun test test/stub",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
-    "certs": "bun run scripts/gen-certs.ts"
+    "certs": "bun run scripts/gen-certs.ts",
+    "dry3mf": "bun run scripts/dry-rehearsal-3mf.ts"
   },
   "dependencies": {
     "aedes": "^0.51.3",

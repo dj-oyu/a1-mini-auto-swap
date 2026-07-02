@@ -51,7 +51,10 @@ const PRINTER_FTPS_PORT = num("PRINTER_FTPS_PORT", 990);
 const PRINTER_SERIAL = env("PRINTER_SERIAL", "STUB0001")!;
 const PRINTER_ACCESS_CODE = env("PRINTER_ACCESS_CODE", "change-me")!;
 
-const MOSQUITTO_URL = env("MOSQUITTO_URL", "mqtt://127.0.0.1:1883")!;
+// No default: without a Mosquitto broker configured (e.g. Windows dev boxes
+// running against printer-stub only), the printfarm/* gateway is disabled
+// entirely rather than repeatedly failing to connect to 127.0.0.1:1883.
+const MOSQUITTO_URL = env("MOSQUITTO_URL");
 const DISCORD_WEBHOOK_URL = env("DISCORD_WEBHOOK_URL");
 const BASE_URL = env("BASE_URL");
 
@@ -95,9 +98,13 @@ const printer = new MqttFtpsPrinter(
   { ejectArtifact: () => buildEjectThreemf(SWAP_SNIPPET) },
 );
 
-const gateway = new PrintfarmGateway(new MqttPublisherClient(MOSQUITTO_URL));
+// printfarm/* gateway is opt-in: only built when MOSQUITTO_URL is set, so
+// dev/test runs without a local Mosquitto broker don't attempt (and spam-log)
+// a connection to a broker that isn't there.
+const gateway = MOSQUITTO_URL ? new PrintfarmGateway(new MqttPublisherClient(MOSQUITTO_URL)) : undefined;
 const sse = new SseBroadcaster();
-const notifiers: Notifier[] = [gateway, sse];
+const notifiers: Notifier[] = [sse];
+if (gateway) notifiers.push(gateway);
 if (DISCORD_WEBHOOK_URL) {
   notifiers.push(new WebhookNotifier({ url: DISCORD_WEBHOOK_URL, baseUrl: BASE_URL }));
 }
@@ -163,7 +170,7 @@ app.route("/", createEventsApp(sse)); // GET /events → SSE live updates (spec 
 const server = Bun.serve({ port: HTTP_PORT, fetch: app.fetch });
 console.log(`orchestrator up`);
 console.log(`  printer   mqtts://${PRINTER_HOST}:${PRINTER_MQTT_PORT} (serial ${PRINTER_SERIAL})`);
-console.log(`  gateway   ${MOSQUITTO_URL} → printfarm/*`);
+console.log(gateway ? `  gateway   ${MOSQUITTO_URL} → printfarm/*` : `  gateway   disabled (MOSQUITTO_URL unset)`);
 console.log(`  webhook   ${DISCORD_WEBHOOK_URL ? "enabled" : "disabled"}`);
 console.log(`  HTTP API  http://0.0.0.0:${server.port}`);
 
