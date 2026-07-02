@@ -9,6 +9,7 @@ import { createThumbnailApp } from "./api/thumbnail-routes.ts";
 import { createModelApp } from "./api/model-routes.ts";
 import { createPrinterApp, printerStatusView } from "./api/printer-routes.ts";
 import { createSnapshotApp, type SnapshotSource } from "./api/snapshot-routes.ts";
+import { BambuCameraSource } from "./orchestrator/camera.ts";
 import { createDiagnosticsApp } from "./api/diagnostics-routes.ts";
 import { createUiApp } from "./api/ui-routes.ts";
 import { createVerifyApp } from "./api/verify-routes.ts";
@@ -225,9 +226,13 @@ app.route("/", createUploadApp({ repo, cacheDir: CACHE_DIR })); // POST /api/que
 app.route("/", createThumbnailApp({ repo, cacheDir: CACHE_DIR })); // GET …/thumbnail (spec 17 §6)
 app.route("/", createModelApp({ repo, cacheDir: CACHE_DIR })); // GET …/model (spec 17 §9)
 app.route("/", createPrinterApp({ repo, status: mqtt })); // GET /api/printer/status — live ETA (spec 10)
-// TODO: capture the A1 mini camera (hardware-dependent/unverified). Until then
-// latest() returns null → GET /api/printer/snapshot 404s (UI shows "なし").
-const snapshotSource: SnapshotSource = { latest: () => null };
+// Real A1 chamber camera (port-6000 protocol, 実測 2026-07-02): on-demand
+// capture with a short TTL cache; a dead camera degrades to 404 (UI「なし」).
+const snapshotSource: SnapshotSource = new BambuCameraSource({
+  host: PRINTER_HOST,
+  accessCode: PRINTER_ACCESS_CODE,
+  port: num("PRINTER_CAMERA_PORT", 6000),
+});
 app.route("/", createSnapshotApp({ source: snapshotSource })); // GET /api/printer/snapshot (spec 17 §5)
 app.route(
   "/",
