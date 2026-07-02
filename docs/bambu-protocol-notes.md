@@ -87,8 +87,8 @@ Windows ラップトップ上のオーケストレーター/診断から実 A1 m
 - **セッションスロットは実質1つ**。QUIT を送らずソケットを破棄すると、プリンター側が
   そのセッションを**1〜3分保持**し、次の接続は Timeout / ECONNREFUSED になる。
   **QUIT を送れば即時解放**（直後の再接続が約2秒で成立、実験で確認）。
-  → 対策実装済み: `src/orchestrator/ftps-session.ts`（全FTPS I/Oを直列化＋必ずQUIT）、
-  `withFtpsRetry`（過渡失敗を20秒間隔でリトライ）。
+  → 対策実装済み: 全FTPS操作を `runSerialized`（`ftps-session.ts`）で直列化し、単一スロットの
+  競合を根絶。診断セッションは QUIT を必ず送出。アップロードは curl が自前でクリーン終了する。
 - 短時間に接続試行を繰り返すと FTPS サーバー自体が wedge し、ECONNREFUSED を返し続ける
   ことがある。**プリンター再起動で回復**。連打・並行接続は構造的に避けること。
 - `/cache` には過去の印刷ファイルが大量に残留する（数十件・数百MB規模を確認）。
@@ -105,10 +105,16 @@ Windows ラップトップ上のオーケストレーター/診断から実 A1 m
   `handshake ccs appdata… → FIN`、ALERTレコード無し）。
   (2) `tls.connect`/`createServer` の **`minVersion`/`maxVersion` を無視**する
   （1.2固定を指定しても制御接続は TLS1.3 でネゴした）。
-  → 対策: アップロードは **PROT C ＋ 平文データチャネル**の自前エンジン
-  （`src/orchestrator/ftps-transfer.ts`）。平文なら FIN が正当な終端で、close_notify 問題を
-  構造的に回避。制御チャネルは TLS のまま（認証情報は保護）。EPSV は実機 502 のため PASV のみ。
-- **EPSV は 502 で拒否**（curl 実測）。basic-ftp の EPSV→PASV フォールバックは正常動作を確認。
+- **実機は「PROT C」を `200` で受理しつつ、平文データ接続が来ると制御ごと FIN で切断**する
+  （＝口先だけ受理、実際はデータTLS必須）。トレースで確認: PROT C→200 / STOR→150 の直後、
+  平文データ接続で制御に FIN。→ 自前の平文データチャネル案（旧 `ftps-transfer.ts`）は**却下**。
+- **node-forge も不可**: TLS1.0/1.1 どまりで、実機の TLS1.2 + AES-GCM に非対応
+  （データTLSハンドシェイクが `Unsupported protocol version` で失敗）。
+  → **結論: アップロードは curl に委譲**（`src/orchestrator/ftps-curl.ts`）。curl は正常な
+  close_notify を送るため実機で 226 を得られる唯一のクライアントだった。制御チャネルの診断
+  （`checkFtps`）は Bun ネイティブのまま（LIST/PROT 応答は close_notify 不要で成立）。
+- **EPSV は 502 で拒否**（curl 実測）。curl は `--disable-epsv`、診断の basic-ftp は
+  EPSV→PASV 自動フォールバックで対応。
 - 実機の制御応答はテキスト部が空（`226 `、`502 ` 等）。パーサはコード+空白のみで解釈すること。
 
 ### MQTT / report

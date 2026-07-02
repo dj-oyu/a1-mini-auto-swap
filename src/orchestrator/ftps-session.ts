@@ -24,20 +24,29 @@ export interface FtpsSessionOptions {
   timeoutMs?: number;
 }
 
-/** Process-wide serialization: at most one printer FTPS session at a time. */
+/** Process-wide serialization: at most one printer FTPS interaction at a time.
+ *  The A1 has a single session slot, so a Bun-native session (diagnostics) and
+ *  a curl upload (ftps-curl.ts) must never overlap either. Both go through
+ *  runSerialized. */
 let queue: Promise<unknown> = Promise.resolve();
+
+/** Serialize `fn` against every other printer FTPS interaction (Bun sessions
+ *  AND curl uploads share the printer's one slot). */
+export function runSerialized<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = queue;
+  const run = (async () => {
+    await prev.catch(() => {}); // a predecessor's failure must not block us
+    return fn();
+  })();
+  queue = run.catch(() => {}); // keep the chain alive regardless of outcome
+  return run;
+}
 
 export function withFtpsSession<T>(
   opts: FtpsSessionOptions,
   fn: (client: Client) => Promise<T>,
 ): Promise<T> {
-  const prev = queue;
-  const run = (async () => {
-    await prev.catch(() => {}); // a predecessor's failure must not block us
-    return openAndRun(opts, fn);
-  })();
-  queue = run.catch(() => {}); // keep the chain alive regardless of outcome
-  return run;
+  return runSerialized(() => openAndRun(opts, fn));
 }
 
 async function openAndRun<T>(
