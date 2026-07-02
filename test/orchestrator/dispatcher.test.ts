@@ -51,6 +51,39 @@ describe("Dispatcher — single job", () => {
     expect(dbh.repo.getStocker()!.remaining).toBe(9);
     expect(printingCount()).toBe(0);
   });
+
+  // INV-RUNOUT-02 (machine-layer proxy; the wording itself is the AI layer):
+  // a silently-substituted color must surface in the completion notice —
+  // spec 14 "サイレントに色が変わったことに後から気づく事故を防ぐ".
+  test("onFinished after a color substitution: the job_finished notification mentions it (INV-RUNOUT-02)", async () => {
+    const events: Array<{ type: string; message?: string; severity?: string }> = [];
+    dispatcher = new Dispatcher(dbh.repo, printer, {
+      notifier: { notify: (e) => events.push(e) },
+    });
+    const id = queuedJob("a.3mf");
+    await dispatcher.dispatchNext();
+    dbh.repo.setSubstitution(id, 1, "#0000FF");
+
+    await dispatcher.onFinished(id);
+
+    const finish = events.filter((e) => e.type === "job_finished");
+    expect(finish).toHaveLength(1);
+    expect(finish[0]!.message).toContain("自動切替");
+    expect(finish[0]!.message).toContain("#0000FF");
+  });
+
+  test("onFinished without a substitution: the job_finished notification carries no substitution notice", async () => {
+    const events: Array<{ type: string; message?: string }> = [];
+    dispatcher = new Dispatcher(dbh.repo, printer, {
+      notifier: { notify: (e) => events.push(e) },
+    });
+    const id = queuedJob("a.3mf");
+    await dispatcher.dispatchNext();
+    await dispatcher.onFinished(id);
+    const finish = events.filter((e) => e.type === "job_finished");
+    expect(finish).toHaveLength(1);
+    expect(finish[0]!.message ?? "").not.toContain("自動切替");
+  });
 });
 
 describe("Dispatcher — sequencing (INV-DISPATCH-02/03)", () => {
