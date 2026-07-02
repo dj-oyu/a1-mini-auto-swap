@@ -1,6 +1,6 @@
 import type { JobRow } from "../db/types.ts";
 import type { PrinterPort } from "../core/ports.ts";
-import { EJECT_ARTIFACT_NAME } from "../core/artifact.ts";
+import { EJECT_ARTIFACT_NAME, printerUploadPath } from "../core/artifact.ts";
 import { OrchestratorMqttClient } from "./mqtt-client.ts";
 import { uploadBytes, type FtpsUploadOptions } from "./ftps-client.ts";
 
@@ -41,7 +41,7 @@ export class MqttFtpsPrinter implements PrinterPort {
     if (artifact.amsMapping.length !== 4) {
       throw new Error(`ams_mapping must have exactly 4 elements (INV-MQTT-01)`);
     }
-    await uploadBytes(this.ftps, artifact.bytes, artifact.remoteName);
+    await uploadBytes(this.ftps, artifact.bytes, printerUploadPath(artifact.remoteName));
     this.mqtt.publishProjectFile({
       param: artifact.param,
       url: artifact.url,
@@ -63,7 +63,7 @@ export class MqttFtpsPrinter implements PrinterPort {
     this.mqtt.stop();
     const eject = this.opts.ejectArtifact?.();
     if (!eject) return; // no eject artifact configured — stop-only
-    await uploadBytes(this.ftps, eject, EJECT_ARTIFACT_NAME);
+    await uploadBytes(this.ftps, eject, printerUploadPath(EJECT_ARTIFACT_NAME));
     this.mqtt.publishProjectFile({
       param: "Metadata/plate_1.gcode",
       url: `ftp:///cache/${EJECT_ARTIFACT_NAME}`,
