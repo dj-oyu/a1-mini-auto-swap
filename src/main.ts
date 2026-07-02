@@ -9,6 +9,7 @@ import { createThumbnailApp } from "./api/thumbnail-routes.ts";
 import { createModelApp } from "./api/model-routes.ts";
 import { createPrinterApp, printerStatusView } from "./api/printer-routes.ts";
 import { createSnapshotApp, type SnapshotSource } from "./api/snapshot-routes.ts";
+import { createDiagnosticsApp } from "./api/diagnostics-routes.ts";
 import { createUiApp } from "./api/ui-routes.ts";
 import { createEventsApp } from "./api/events-routes.ts";
 import { createAuth, createLoginApp } from "./api/auth.ts";
@@ -149,6 +150,20 @@ app.route("/", createPrinterApp({ repo, status: mqtt })); // GET /api/printer/st
 // latest() returns null → GET /api/printer/snapshot 404s (UI shows "なし").
 const snapshotSource: SnapshotSource = { latest: () => null };
 app.route("/", createSnapshotApp({ source: snapshotSource })); // GET /api/printer/snapshot (spec 17 §5)
+app.route(
+  "/",
+  createDiagnosticsApp({
+    // GET /api/diagnostics — connectivity probe against the configured printer
+    // (spec 20.7). Same logic for stub or real A1 mini; eases Phase 8 cutover.
+    target: {
+      host: PRINTER_HOST,
+      mqttPort: PRINTER_MQTT_PORT,
+      ftpsPort: PRINTER_FTPS_PORT,
+      serial: PRINTER_SERIAL,
+      accessCode: PRINTER_ACCESS_CODE,
+    },
+  }),
+);
 app.route("/", createUiApp(repo)); // GET / → server-rendered dashboard (spec 17)
 app.route("/", createEventsApp(sse)); // GET /events → SSE live updates (spec 17)
 

@@ -1,4 +1,4 @@
-import Aedes from "aedes";
+import Aedes, { type AuthenticateError, type AuthErrorCode } from "aedes";
 import { createServer, type Server as TlsServer } from "node:tls";
 import type { AddressInfo } from "node:net";
 import { VirtualPrinter } from "./virtual-printer.ts";
@@ -13,6 +13,15 @@ import { ensureCerts } from "./tls.ts";
 export interface MqttServerOptions {
   port: number; // 8883 in production; 0 lets the OS pick (tests)
   certDir: string;
+  /**
+   * When set, CONNECT is authenticated the way a real A1 mini does (spec 2):
+   * username must equal `username` (default "bblp") and the password must equal
+   * the LAN access code. Left unset, the broker accepts any credentials (the
+   * historical behaviour most tests rely on). Enabling it lets the diagnostics
+   * probe (spec 20.7) distinguish a good access code from a bad one on the stub.
+   */
+  accessCode?: string;
+  username?: string; // default "bblp" (only consulted when accessCode is set)
 }
 
 /**
@@ -33,6 +42,28 @@ export class StubMqttServer {
     this.tls = createServer({ key, cert }, (socket) =>
       this.broker.handle(socket as never),
     );
+
+    // Optional access-code auth (spec 2): a real printer uses the LAN access
+    // code as the MQTT password. Only enforced when configured, so existing
+    // tests that don't pass an accessCode keep connecting freely.
+    if (opts.accessCode !== undefined) {
+      const expectedUser = opts.username ?? "bblp";
+      const expectedPass = opts.accessCode;
+      this.broker.authenticate = (_client, username, password, done) => {
+        const pass = password ? password.toString() : "";
+        const ok = username === expectedUser && safeEqual(pass, expectedPass);
+        if (ok) {
+          done(null, true);
+        } else {
+          // returnCode 4 = Bad username or password (MQTT CONNACK). Set as a
+          // literal — aedes exposes the AuthErrorCode enum only in its types,
+          // not at runtime.
+          const err = new Error("bad access code") as AuthenticateError;
+          err.returnCode = 4 as AuthErrorCode;
+          done(err, false);
+        }
+      };
+    }
 
     // Printer state changes -> publish a report to subscribers.
     this.onReport = (report: StatusReport) => this.publishReport(JSON.stringify(report));
@@ -124,4 +155,12 @@ export class StubMqttServer {
     await new Promise<void>((resolve) => this.tls.close(() => resolve()));
     await new Promise<void>((resolve) => this.broker.close(() => resolve()));
   }
+}
+
+/** Constant-time-ish string compare that tolerates length mismatch. */
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }

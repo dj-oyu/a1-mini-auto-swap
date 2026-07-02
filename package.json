@@ -9,6 +9,7 @@
     "start": "bun run src/main.ts",
     "dev:ui": "bun run src/dev/harness.ts",
     "stub": "bun run src/stub/main.ts",
+    "diag": "bun run scripts/diag.ts",
     "test": "bun test",
     "test:ci": "bun test test/stub test/verify test/db test/orchestrator test/core test/injection test/api test/dev test/scripts",
     "test:stub": "bun test test/stub",

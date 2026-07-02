@@ -632,11 +632,25 @@ POST /__control/fault
 実機検証フェーズへの移行をスムーズにするため、スタブ・実機どちらに対しても使える診断APIを用意する。
 
 ```
-GET /api/diagnostics
-→ { mqtt_reachable, ftps_reachable, developer_mode_enabled, access_code_valid, ... }
+GET /api/diagnostics        （CLI版: bun run diag）
+→ {
+    host,
+    mqtt_reachable, ftps_reachable,      // 素のTCP到達性（MQTT/FTPS ポート）
+    mqtt_auth_ok, report_received,       // mqtts接続（bblp+アクセスコード）→ pushall → report受信
+    ftps_auth_ok,                        // implicit FTPS ログイン
+    prot_mode,                           // "P" | "C" | "none"（19章のPROT Cフォールバック実測）
+    prot_detail,                         // PROTプローブの応答コードtrace
+    sample_report,                       // 受信reportのprintブロック生JSON（実機調査のエビデンス）
+    errors                               // 失敗した検査ごとの理由
+  }
 ```
 
-ポート到達性（MQTT 8883 / FTPS 990）、Developer Mode有効化、アクセスコードの妥当性をチェックする。スタブ・実機の両方で同じ診断ロジックが通ることを確認できれば、切り替え時の不具合切り分けが速くなる。
+各検査は個別に時間制限を持ち、失敗しても例外を投げず構造化して返す（「失敗も正常な結果」）。
+`developer_mode_enabled` はMQTTからは確実に判定できないため、書き込み系コマンドの実挙動に委ね、
+診断では扱わない。アクセスコードの妥当性は `mqtt_auth_ok` / `ftps_auth_ok`（実際の認証成否）で判定する。
+実装は `src/orchestrator/diagnostics.ts`（I/Oアダプタ層。coreは触らない）。**アクセスコードは
+結果にもログにも出さない**。スタブ・実機の両方で同じ診断ロジックが通ることを確認できれば、
+切り替え時の不具合切り分けが速くなる。
 
 ### 20.8 テスト構成（参考：bambuddyの構成）
 
