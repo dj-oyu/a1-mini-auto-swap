@@ -65,9 +65,20 @@ const MOSQUITTO_URL = env("MOSQUITTO_URL");
 const DISCORD_WEBHOOK_URL = env("DISCORD_WEBHOOK_URL");
 const BASE_URL = env("BASE_URL");
 
-// The swap sequence baked into the print profile (spec 7). Placeholder default;
-// TODO: load from the server-side profile (JSON, repo-managed).
-const SWAP_SNIPPET = env("SWAP_SNIPPET", "G1 Z180 F3000\nM400")!;
+// The swap sequence baked into the print profile (spec 7): the real Niiさん mod
+// sequence lives in the repo-managed profile file so it flows automatically into
+// both the print pipeline (resolver → injectIntoThreemf → injectEndSequence,
+// MD5 recomputed) and the eject job (buildEjectThreemf) below — there is no
+// separate wiring for either. `SWAP_SNIPPET` env stays as an override escape
+// hatch (e.g. Stage 7's real-print note: swap it out for a harmless snippet
+// while validating the rest of the pipeline). Comment lines in the profile are
+// preserved verbatim (gcode-inject.ts only trims leading/trailing whitespace).
+const SWAP_PROFILE_PATH = "profiles/swap-sequence.gcode";
+const swapSnippetOverride = env("SWAP_SNIPPET");
+const SWAP_SNIPPET = swapSnippetOverride ?? readFileSync(SWAP_PROFILE_PATH, "utf8");
+const swapProfileLabel = swapSnippetOverride
+  ? "swap profile: (env override)"
+  : `swap profile: ${SWAP_PROFILE_PATH} (${SWAP_SNIPPET.trim().split("\n").length} lines)`;
 
 // ── adapters ───────────────────────────────────────────────────────────────
 const { db, repo } = openDb(DB_PATH);
@@ -140,12 +151,19 @@ const diagTarget: DiagnosticsOptions = {
 // safe bounds, run the last-line-of-defense heater/extrusion guard, package it,
 // FTPS-upload it and start it via MQTT. The remote name sits OUTSIDE the `job-`
 // prefix so the monitor never mis-attributes it to a DB job (core/artifact.ts).
+//
+// `includeSwap` (spec 20.7 Stage 5 "スワップ込みリハーサル"): when set, the real
+// swap profile is appended after the motion trajectory (dry-gcode.ts §9), so
+// the rehearsal also exercises a real plate swap. findUnsafeLines still runs
+// over the WHOLE program including the swap block — the profile has no heater/
+// extrusion commands, so it passes — but the guard is never bypassed for it.
 const DRY_REHEARSAL_ARTIFACT = "dry-rehearsal.gcode.3mf";
-async function startDryRun(): Promise<void> {
+async function startDryRun(includeSwap: boolean): Promise<void> {
   const gcode = buildDryRehearsalGcode(A1_MINI_SAFE_BOUNDS, {
     sweepDurationMs: 5000,
     feedrate: 3000,
     danceAmplitudeMm: 30,
+    ...(includeSwap ? { swapSequence: SWAP_SNIPPET } : {}),
   });
   const unsafe = findUnsafeLines(gcode);
   if (unsafe.length > 0) {
@@ -242,6 +260,7 @@ app.route("/", createEventsApp(sse)); // GET /events → SSE live updates (spec 
 // idleTimeout: 0 for the same reason.
 const server = Bun.serve({ port: HTTP_PORT, idleTimeout: 0, fetch: app.fetch });
 console.log(`orchestrator up`);
+console.log(`  ${swapProfileLabel}`);
 console.log(`  printer   mqtts://${PRINTER_HOST}:${PRINTER_MQTT_PORT} (serial ${PRINTER_SERIAL})`);
 console.log(gateway ? `  gateway   ${MOSQUITTO_URL} → printfarm/*` : `  gateway   disabled (MOSQUITTO_URL unset)`);
 console.log(`  webhook   ${DISCORD_WEBHOOK_URL ? "enabled" : "disabled"}`);

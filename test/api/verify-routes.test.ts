@@ -33,18 +33,20 @@ function status(over: Partial<PrinterStatusView> = {}): PrinterStatusView {
 
 interface Spies {
   dryRuns: number;
+  dryRunSwapArgs: boolean[];
   ejects: number;
 }
 
 function build(opts: { diag?: DiagnosticsResult; status?: PrinterStatusView; dryRunThrows?: boolean } = {}) {
   const { repo } = openDb(":memory:");
-  const spies: Spies = { dryRuns: 0, ejects: 0 };
+  const spies: Spies = { dryRuns: 0, dryRunSwapArgs: [], ejects: 0 };
   const deps: VerifyDeps = {
     repo,
     runDiagnostics: async () => opts.diag ?? allPassDiag(),
     printerStatus: () => opts.status ?? status(),
-    startDryRun: async () => {
+    startDryRun: async (includeSwap: boolean) => {
       spies.dryRuns++;
+      spies.dryRunSwapArgs.push(includeSwap);
       if (opts.dryRunThrows) throw new Error("unsafe gcode guard tripped");
     },
     eject: async () => {
@@ -187,6 +189,27 @@ describe("POST /api/verify/dry-run (Stage 5)", () => {
     const { app } = build({ dryRunThrows: true });
     const res = await app.request("/api/verify/dry-run", json({ confirmed: true }));
     expect(res.status).toBe(500);
+  });
+
+  test("no includeSwap field → startDryRun called with includeSwap=false (backward compatible)", async () => {
+    const { app, spies } = build();
+    const res = await app.request("/api/verify/dry-run", json({ confirmed: true }));
+    expect(res.status).toBe(200);
+    expect(spies.dryRunSwapArgs).toEqual([false]);
+  });
+
+  test("includeSwap:true is forwarded to startDryRun", async () => {
+    const { app, spies } = build();
+    const res = await app.request("/api/verify/dry-run", json({ confirmed: true, includeSwap: true }));
+    expect(res.status).toBe(200);
+    expect(spies.dryRunSwapArgs).toEqual([true]);
+  });
+
+  test("includeSwap:false is forwarded as false (explicit opt-out)", async () => {
+    const { app, spies } = build();
+    const res = await app.request("/api/verify/dry-run", json({ confirmed: true, includeSwap: false }));
+    expect(res.status).toBe(200);
+    expect(spies.dryRunSwapArgs).toEqual([false]);
   });
 });
 

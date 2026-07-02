@@ -31,8 +31,10 @@ export interface VerifyDeps {
   runDiagnostics: () => Promise<DiagnosticsResult>;
   /** Latest printer status view (Stage 4 + the dry-run busy guard). */
   printerStatus: () => PrinterStatusView | Promise<PrinterStatusView>;
-  /** Publish the print-free dry-rehearsal job (Stage 5). */
-  startDryRun: () => Promise<void>;
+  /** Publish the print-free dry-rehearsal job (Stage 5). `includeSwap` appends
+   *  the real swap profile after the motion trajectory (dry-gcode.ts §9), so the
+   *  rehearsal also exercises a real plate swap end-to-end. */
+  startDryRun: (includeSwap: boolean) => Promise<void>;
   /** stop + eject job (Stage 6). */
   eject: () => Promise<void>;
 }
@@ -110,6 +112,10 @@ const STAGES: StageDef[] = [
 
 /** The three physical safety confirmations that gate the Stage 5 run button. */
 const SAFETY_CHECKS = ["ベッドは空である", "一時停止ボタンに手が届く", "可動域を目視確認した"];
+
+/** The two extra physical confirmations required only for the "スワップ込み
+ *  リハーサル" (includeSwap) variant — the real交換mod actually has to move. */
+const SWAP_SAFETY_CHECKS = ["交換modが装着され動作可能", "ストッカーに供給用プレートがある"];
 
 function initialProgress(): Progress {
   const stages: Record<string, z.infer<typeof StageState>> = {};
@@ -197,6 +203,9 @@ export function createVerifyApp(deps: VerifyDeps): Hono {
 
   // Stage 5: publish the dry-rehearsal job. `confirmed:true` is mandatory (server
   // mirror of the physical-safety checkbox gate); refuses when the printer is busy.
+  // `includeSwap` (optional, defaults false — old clients keep working unchanged)
+  // runs the "スワップ込みリハーサル" variant (spec 20.7): the swap profile is
+  // appended after the motion test, so the mechanism actually moves a plate.
   app.post("/api/verify/dry-run", async (c) => {
     let body: unknown = null;
     try {
@@ -206,12 +215,13 @@ export function createVerifyApp(deps: VerifyDeps): Hono {
     }
     const confirmed = !!body && typeof body === "object" && (body as { confirmed?: unknown }).confirmed === true;
     if (!confirmed) return c.json({ error: "confirmed:true is required" }, 400);
+    const includeSwap = !!body && typeof body === "object" && (body as { includeSwap?: unknown }).includeSwap === true;
 
     const s = await deps.printerStatus();
     if (isBusy(s)) return c.json({ error: "printer is busy; stop the current job first" }, 409);
 
     try {
-      await deps.startDryRun();
+      await deps.startDryRun(includeSwap);
     } catch (e) {
       return c.json({ error: (e as Error).message }, 500);
     }
@@ -319,7 +329,10 @@ function statusBody(p: Progress): Html {
     ${runBtn}`;
 }
 
-/** Stage 5: safety-gated dry-rehearsal run + live progress panel. */
+/** Stage 5: safety-gated dry-rehearsal run + live progress panel. Includes the
+ *  「スワップ込みリハーサル」opt-in: checking it reveals two extra physical
+ *  confirmations (the mod itself, and stocker stock), and the run button stays
+ *  disabled until ALL currently-relevant checks are ticked (verify.js). */
 function dryRunBody(): Html {
   const boxes = SAFETY_CHECKS.map(
     (label, i) => html`<label class="safety">
@@ -327,8 +340,22 @@ function dryRunBody(): Html {
       <span>${label}</span>
     </label>`,
   );
+  const swapBoxes = SWAP_SAFETY_CHECKS.map(
+    (label, i) => html`<label class="safety">
+      <input type="checkbox" data-verify-swap-safety id="swap-safety-${i}" />
+      <span>${label}</span>
+    </label>`,
+  );
   return html`
     <div class="safety-list">${boxes}</div>
+    <label class="safety">
+      <input type="checkbox" id="verifySwapToggle" data-verify-swap-toggle />
+      <span>スワップシーケンス込みで実行</span>
+    </label>
+    <div id="verifySwapExtra" class="safety-list swap-extra" hidden>
+      <p class="muted swap-warn">注意: ベッドが Z185・Y±オーバートラベルまで動きます。</p>
+      ${swapBoxes}
+    </div>
     <button id="verifyDryRun" class="act primary" disabled>ドライリハーサルを実行</button>
     <p id="verifyDryMsg" class="muted"></p>
     <div id="verifyUploadLive" class="dry-live" data-upload-live hidden>
@@ -362,8 +389,10 @@ function realPrintBody(): Html {
   return html`
     <p>通常 UI から 1 プレートだけ実印刷して仕上げます。</p>
     <p class="muted">
-      注意: 実印刷の前に、スワップ挿入 (SWAP_SNIPPET) を無害な値
-      （例: <code>G1 Z180 F3000 / M400</code>）にしておくこと。異常があれば一時停止で止められるよう手元で待機。
+      注意: 通常運用ではスワップ挿入 (SWAP_SNIPPET) は
+      <code>profiles/swap-sequence.gcode</code>（実機の交換modシーケンス）が既定です。慎重に検証したい場合は
+      env <code>SWAP_SNIPPET</code> を無害な値（例: <code>G1 Z180 F3000 / M400</code>）に一時的に上書きしてから
+      実印刷し、確認後に上書きを外すこと。異常があれば一時停止で止められるよう手元で待機。
     </p>
     <a class="act primary" href="/">通常 UI（印刷キュー）を開く</a>
   `;

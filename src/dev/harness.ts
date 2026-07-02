@@ -109,7 +109,7 @@ app.route(
       errors: {},
     }),
     printerStatus: () => ({ printing: false, job_id: null, percent: 0, remaining_min: 0, gcode_state: "IDLE" }),
-    startDryRun: async () => {},
+    startDryRun: async (_includeSwap: boolean) => {},
     eject: async () => {},
   }),
 );

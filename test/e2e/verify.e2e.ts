@@ -42,4 +42,37 @@ test.describe("verify wizard (/verify)", () => {
     await boxes.nth(2).check();
     await expect(runBtn).toBeEnabled(); // all three → armed
   });
+
+  test("スワップ込みリハーサル: checking it reveals 2 extra confirmations, all must be checked to arm", async ({ page }) => {
+    await page.goto("/verify");
+    const runBtn = page.locator("#verifyDryRun");
+    const boxes = page.locator("[data-verify-safety]");
+    const swapToggle = page.locator("[data-verify-swap-toggle]");
+    const swapExtra = page.locator("#verifySwapExtra");
+    const swapBoxes = page.locator("[data-verify-swap-safety]");
+
+    // base 3 confirmations alone already arm the button (unaffected by this slice).
+    await boxes.nth(0).check();
+    await boxes.nth(1).check();
+    await boxes.nth(2).check();
+    await expect(runBtn).toBeEnabled();
+
+    // extra confirmations are hidden until the swap toggle is on.
+    await expect(swapExtra).toBeHidden();
+    await swapToggle.check();
+    await expect(swapExtra).toBeVisible();
+    await expect(swapBoxes).toHaveCount(2);
+    // opting in re-gates the button until the 2 swap-specific checks are done too.
+    await expect(runBtn).toBeDisabled();
+
+    await swapBoxes.nth(0).check();
+    await expect(runBtn).toBeDisabled(); // still one unchecked
+    await swapBoxes.nth(1).check();
+    await expect(runBtn).toBeEnabled(); // all 5 → armed
+
+    // un-toggling drops the extra requirement and re-arms on the base 3 alone.
+    await swapToggle.uncheck();
+    await expect(swapExtra).toBeHidden();
+    await expect(runBtn).toBeEnabled();
+  });
 });
