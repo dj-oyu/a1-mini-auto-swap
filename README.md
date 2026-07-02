@@ -112,3 +112,7 @@ Phase 0〜7（足場 / printer-stub / プロトコル境界 / コアループ / 
 | [`docs/ui-handoff.md`](docs/ui-handoff.md) | Web UI の要件・API・デザイン哲学 |
 | [`docs/m5stack-tab5-frontend-research.md`](docs/m5stack-tab5-frontend-research.md) | IoT監視ディスプレイ（Tab5）調査 |
 | [`CLAUDE.md`](CLAUDE.md) | AI コーディングエージェント向けの作業指針 |
+
+## ライセンス
+
+[MIT](LICENSE)

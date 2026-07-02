@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "type": "module",
   "private": true,
+  "license": "MIT",
   "description": "Bambu A1 mini multi-plate auto-print orchestrator + printer-stub (self-hosted controller host, no-cloud)",
   "scripts": {
     "start": "bun run src/main.ts",
