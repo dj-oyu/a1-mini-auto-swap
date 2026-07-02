@@ -567,6 +567,7 @@ function renderDashboard(data: DashboardData): Html {
   </header>
   ${renderDashboardInner(data)}
   <div id="modal"></div>
+  <div id="toast" class="toast" hidden></div>
   <script>${raw(LIVE_SCRIPT)}</script>
 </body>
 </html>`;
@@ -627,6 +628,16 @@ const LIVE_SCRIPT = `
       if (window.htmx) window.htmx.ajax('GET', '/ui/dashboard', { target: '#dashboard', swap: 'outerHTML' });
     }
     function closeModal() { var m = document.getElementById('modal'); if (m) m.innerHTML = ''; }
+    // Transient alert (e.g. build-plate low). Click or auto-hide after ~12s.
+    function showToast(msg) {
+      var t = document.getElementById('toast');
+      if (!t) return;
+      t.textContent = msg;
+      t.hidden = false;
+      t.onclick = function () { t.hidden = true; };
+      clearTimeout(t.__timer);
+      t.__timer = setTimeout(function () { t.hidden = true; }, 12000);
+    }
 
     // MVP #5: the filament-confirm modal. Cancel/backdrop close it; 確定 gathers
     // the per-slot AMS selects into a 4-element mapping and PATCHes the job.
@@ -752,8 +763,12 @@ const LIVE_SCRIPT = `
       return;
     }
     var es = new EventSource('/events');
-    ['job_started','job_finished','job_failed','waiting_for_refill','pending_action','filament_switched','timeout']
+    ['job_started','job_finished','job_failed','aborted','stocker_low','waiting_for_refill','pending_action','filament_switched','timeout']
       .forEach(function (t) { es.addEventListener(t, refresh); });
+    // build-plate low: pop a toast the moment the last plate is on the bed
+    es.addEventListener('stocker_low', function (e) {
+      try { showToast(JSON.parse(e.data).message || 'ビルドプレート残りわずか'); } catch (_) {}
+    });
     // push-based measured ETA: apply each progress frame directly to the header
     es.addEventListener('progress', function (e) {
       try { liveStatus = JSON.parse(e.data); } catch (_) {}
@@ -829,6 +844,10 @@ const STYLES = `
   .fil-slot{min-width:84px}
   .fil-row select{margin-left:auto;font:inherit;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:#fff}
   .modal-actions{display:flex;gap:8px;justify-content:flex-end}
+  .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:60;max-width:90vw;
+    padding:12px 18px;border-radius:10px;background:#7c4a03;color:#fff;font-weight:600;cursor:pointer;
+    box-shadow:0 8px 24px rgba(0,0,0,.3)}
+  .toast[hidden]{display:none}
   main{padding:0 18px 24px}
   .queue{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
   .empty{color:var(--muted);padding:24px;text-align:center}

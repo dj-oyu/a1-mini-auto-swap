@@ -98,6 +98,44 @@ describe("Dispatcher — abort (spec 8/19)", () => {
   });
 });
 
+describe("Dispatcher — low-stock early warning (spec 13)", () => {
+  test("advisory heads-up when a swap crosses the low-water mark; 'last plate' at 0", async () => {
+    const events: Array<{ type: string; severity?: string; message?: string }> = [];
+    const notifier = { notify: (e: { type: string; severity?: string; message?: string }) => events.push(e) };
+    dispatcher = new Dispatcher(dbh.repo, printer, { notifier, lowStockThreshold: 1 });
+    dbh.repo.setStocker(3, 2); // 2 spares
+
+    const a = queuedJob("a");
+    const b = queuedJob("b");
+    await dispatcher.dispatchNext(); // a printing; no swap yet
+    expect(events.filter((e) => e.type === "stocker_low")).toHaveLength(0);
+
+    await dispatcher.onFinished(a); // swap → remaining 1 → warn "残り1枚"
+    let low = events.filter((e) => e.type === "stocker_low");
+    expect(low).toHaveLength(1);
+    expect(low[0]!.severity).toBe("advisory"); // whisper, not blocking
+    expect(low[0]!.message).toContain("1枚");
+
+    await dispatcher.onFinished(b); // swap → remaining 0 → "last plate on the bed"
+    low = events.filter((e) => e.type === "stocker_low");
+    expect(low).toHaveLength(2);
+    expect(low[1]!.message).toContain("最後");
+  });
+
+  test("no warning while spares stay above the threshold", async () => {
+    const events: string[] = [];
+    dispatcher = new Dispatcher(dbh.repo, printer, {
+      notifier: { notify: (e) => events.push(e.type) },
+      lowStockThreshold: 1,
+    });
+    dbh.repo.setStocker(10, 10);
+    const a = queuedJob("a");
+    await dispatcher.dispatchNext();
+    await dispatcher.onFinished(a); // remaining 9 — well above threshold
+    expect(events).not.toContain("stocker_low");
+  });
+});
+
 describe("Dispatcher — stocker empty (INV-STOCKER-04)", () => {
   test("no dispatch, creates stocker_refill(blocking_queue); refill unblocks", async () => {
     dbh.repo.setStocker(5, 0);

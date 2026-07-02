@@ -40,6 +40,7 @@ export interface NotifyEvent {
     | "job_finished"
     | "job_failed"
     | "aborted"
+    | "stocker_low"
     | "waiting_for_refill"
     | "pending_action"
     | "filament_switched"

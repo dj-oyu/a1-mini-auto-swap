@@ -85,7 +85,14 @@ const notifier = new CompositeNotifier(notifiers);
 
 // ── boot ───────────────────────────────────────────────────────────────────
 await mqtt.connect();
-const orch = createOrchestrator({ repo, printer, notifier, gateway, status: mqtt });
+const orch = createOrchestrator({
+  repo,
+  printer,
+  notifier,
+  gateway,
+  status: mqtt,
+  lowStockThreshold: num("STOCKER_LOW_THRESHOLD", 1),
+});
 
 // Push live progress to browsers over SSE on every observed status update, so the
 // printing header updates without polling (spec 10 / 17 §7).

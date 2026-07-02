@@ -13,7 +13,7 @@ import { createUiApp } from "../api/ui-routes.ts";
 import { createEventsApp } from "../api/events-routes.ts";
 import { SseBroadcaster } from "../orchestrator/sse-notifier.ts";
 import { Dispatcher } from "../core/dispatcher.ts";
-import type { PrinterPort } from "../core/ports.ts";
+import type { NotifyEvent, PrinterPort } from "../core/ports.ts";
 import { seedDevDb } from "./seed.ts";
 
 // Dev harness (docs/ui-handoff.md §2): serve the full HTTP API over an in-memory
@@ -72,6 +72,14 @@ app.route("/", createEventsApp(sse));
 // Dev-only test hook: reset in-memory state between E2E tests.
 app.post("/__dev/reset", (c) => {
   resetDb(c.req.query("seed") !== "0");
+  return c.json({ ok: true });
+});
+
+// Dev-only test hook: emit a notification over SSE (e.g. stocker_low toast).
+app.post("/__dev/notify", (c) => {
+  const type = (c.req.query("type") ?? "stocker_low") as NotifyEvent["type"];
+  const message = c.req.query("message") ?? "最後のビルドプレートをベッドに載せました。補充してください";
+  sse.notify({ type, severity: "advisory", message });
   return c.json({ ok: true });
 });
 
