@@ -1,6 +1,7 @@
 import mqtt, { type MqttClient as MqttConn } from "mqtt";
 import { EventEmitter } from "node:events";
 import { reportTopic, requestTopic } from "../protocol/topics.ts";
+import { pushStatusSchema } from "./report-schema.ts";
 
 /** Normalized printer status the orchestrator consumes (from push_status). */
 export interface PrinterStatus {
@@ -90,12 +91,16 @@ export class OrchestratorMqttClient extends EventEmitter {
       return;
     }
     if (p.gcode_state !== undefined) {
+      // Boundary validation (report-schema.ts): lenient scalar coercion, but
+      // hms entries are checked instead of blindly cast, and NaN degrades to 0.
+      const parsed = pushStatusSchema.safeParse(p);
+      if (!parsed.success) return; // unparseable report: skip, keep last status
       const status: PrinterStatus = {
-        gcodeState: String(p.gcode_state),
-        mcRemainingTime: Number(p.mc_remaining_time ?? 0),
-        mcPercent: Number(p.mc_percent ?? 0),
-        subtaskName: String(p.subtask_name ?? ""),
-        hms: Array.isArray(p.hms) ? (p.hms as Array<{ attr: number; code: number }>) : [],
+        gcodeState: parsed.data.gcode_state,
+        mcRemainingTime: parsed.data.mc_remaining_time,
+        mcPercent: parsed.data.mc_percent,
+        subtaskName: parsed.data.subtask_name,
+        hms: parsed.data.hms,
       };
       this.latestStatus = status;
       this.emit("status", status);
