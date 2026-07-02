@@ -47,6 +47,13 @@ async function openAndRun<T>(
   const client = new Client(opts.timeoutMs ?? 30_000);
   const t0 = Date.now();
   const phase = (msg: string) => console.log(`[ftps] ${msg} (+${Date.now() - t0}ms)`);
+  // FTPS_TRACE=1: dump the full control dialogue (field triage — shows exactly
+  // which command drew which reply / where the server dropped the connection).
+  // basic-ftp's verbose log masks the PASS argument itself; keep it that way.
+  if (process.env.FTPS_TRACE === "1") {
+    client.ftp.verbose = true;
+    client.ftp.log = (msg: string) => console.log(`[ftps-trace +${Date.now() - t0}ms] ${msg.trimEnd()}`);
+  }
   try {
     await client.access({
       host: opts.host,

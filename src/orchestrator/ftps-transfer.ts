@@ -54,14 +54,20 @@ export async function uploadPlainData(
   const timeoutMs = opts.timeoutMs ?? 20_000;
   const chunkSize = opts.chunkSize ?? 64 * 1024;
 
+  const trace = (m: string) => {
+    if (process.env.FTPS_TRACE === "1") console.log(`[ftps-transfer] ${m}`);
+  };
+
   // 1. Plaintext data channel. The A1 accepts PROT C (its own fallback mode);
   //    the stub accepts it too (INV-FTPS-05).
   const prot = await client.send("PROT C");
+  trace(`PROT C → ${prot.code} ${prot.message.trim()}`);
   if (prot.code >= 300) throw new Error(`PROT C rejected: ${prot.code} ${prot.message}`);
 
   // 2. Passive endpoint. The A1 rejects EPSV (502, 実測) — PASV only.
   const pasv = await client.send("PASV");
   const { host, port } = parsePasv227(pasv.message);
+  trace(`PASV → ${pasv.code} data ${host}:${port}`);
   // PASV host antispoof (same rule as curl's --ftp-skip-pasv-ip default):
   // always connect to the control host, ignore an advertised foreign IP.
   const dataHost = host === "0.0.0.0" ? client.ftp.socket.remoteAddress! : host;
@@ -70,9 +76,11 @@ export async function uploadPlainData(
   //    basic-ftp's response loop so control parsing/timeout stay consistent.
   await client.ftp.handle(`STOR ${remotePath}`, (res, task) => {
     if (res instanceof Error) {
+      trace(`STOR phase error: ${res.message}`);
       task.reject(res);
       return;
     }
+    trace(`STOR ← ${res.code} ${res.message.trim()}`);
     if (res.code === 150 || res.code === 125) {
       // Server is ready — open the plain data connection and stream.
       const socket: Socket = netConnect(port, dataHost);
@@ -84,6 +92,7 @@ export async function uploadPlainData(
         task.reject(e);
       });
       socket.on("connect", () => {
+        trace(`data socket connected to ${dataHost}:${port} (plain)`);
         let off = 0;
         const writeNext = (): void => {
           while (off < data.length) {
