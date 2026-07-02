@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StubFtpsServer } from "../../src/stub/ftps-server.ts";
 import { uploadBytes } from "../../src/orchestrator/ftps-client.ts";
+import { FtpsWedgedError } from "../../src/orchestrator/ftps-session.ts";
 
 const CERT_DIR = join(process.cwd(), "certs");
 const ACCESS = "stub-access-code";
@@ -55,6 +56,29 @@ test("uploadBytes retries a transient connect failure and succeeds once the serv
   } finally {
     await server.close().catch(() => {});
   }
+}, 15000);
+
+// 実測 2026-07-02: repeated ECONNREFUSED = the printer's FTPS server has wedged
+// and only a reboot clears it. One refusal is retried (the service may just be
+// booting after a printer restart); two in a row must fail fast with an
+// actionable "reboot the printer" error instead of hammering the server.
+test("two consecutive connection refusals => FtpsWedgedError (fail fast, actionable message)", async () => {
+  const port = await freePort(); // nothing ever listens → ECONNREFUSED each attempt
+  const t0 = Date.now();
+  let err: unknown;
+  try {
+    await uploadBytes(
+      { host: "127.0.0.1", port, accessCode: ACCESS, retries: 4, retryDelayMs: 300 },
+      Buffer.from("x"),
+      "wedged.3mf",
+    );
+  } catch (e) {
+    err = e;
+  }
+  expect(err).toBeInstanceOf(FtpsWedgedError);
+  expect((err as Error).message).toContain("再起動");
+  // gave up after attempt 2 — did not burn the remaining retries
+  expect(Date.now() - t0).toBeLessThan(4_000);
 }, 15000);
 
 test("uploadBytes does NOT retry a hard auth failure (wrong access code fails fast)", async () => {
