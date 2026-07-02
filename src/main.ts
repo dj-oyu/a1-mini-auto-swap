@@ -99,8 +99,14 @@ const resolver: ArtifactResolver = (job) => {
   const original = readFileSync(join(CACHE_DIR, cacheFileName(job.id)));
   // `param` is the ACTUAL plate gcode path inside the archive — a single-plate
   // export from a multi-plate project keeps its original number (plate_24, not
-  // plate_1), so it's discovered, never hardcoded (実測 2026-07-02).
-  const { bytes, param } = injectIntoThreemf(original, { endSnippet: SWAP_SNIPPET });
+  // plate_1), so it's discovered, never hardcoded (実測 2026-07-02). A
+  // multi-plate export additionally lets the confirm step pick WHICH plate to
+  // print (job.selected_plate); when unset, injectIntoThreemf falls back to its
+  // single-plate auto-discovery.
+  const { bytes, param } = injectIntoThreemf(original, {
+    endSnippet: SWAP_SNIPPET,
+    ...(job.selected_plate ? { plate: job.selected_plate } : {}),
+  });
   // remoteName/url use the job- prefixed printer-side name: the printer echoes
   // it as subtask_name, which the monitor correlates on (core/artifact.ts).
   return {
@@ -279,7 +285,7 @@ app.route(
     target: diagTarget,
   }),
 );
-app.route("/", createUiApp(repo)); // GET / → server-rendered dashboard (spec 17)
+app.route("/", createUiApp({ repo, cacheDir: CACHE_DIR })); // GET / → server-rendered dashboard (spec 17)
 // ── TEMPORARY (実機検証用 — 確認後に削除, task#16): swap直前スナップ+Discord ──
 // Field test of the pre-swap snapshot pipeline: camera relay frame → save →
 // Discord photo attachment. Auto trigger: while armed, fire ONCE when a

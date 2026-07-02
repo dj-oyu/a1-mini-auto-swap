@@ -39,6 +39,47 @@ export function findPlateGcodes(files: Record<string, Uint8Array>): string[] {
     .sort();
 }
 
+export interface PlateInfo {
+  /** e.g. "plate_24" — the id to pass as InjectOptions.plate. */
+  plate: string;
+  /** Static per-plate print-time estimate in seconds, when Bambu Studio wrote
+   *  a Metadata/{plate}.json sidecar with a `prediction`/`gcode_prediction`
+   *  field. null when the sidecar is absent or unparseable — the picker just
+   *  omits the estimate for that option (no dependency on plate thumbnails,
+   *  which are not embedded for every plate of a multi-plate export). */
+  estimatedSeconds: number | null;
+}
+
+/**
+ * List every plate a `.gcode.3mf` carries (upload-time plate selection): a
+ * project exported with "all plates" ships one Metadata/plate_N.gcode per
+ * plate. Single-plate archives return a 1-element array — callers only need
+ * to offer a picker when this has more than one entry.
+ */
+export function listPlates(threemf: Buffer): PlateInfo[] {
+  const files = unzipSync(threemf);
+  return findPlateGcodes(files).map((gpath) => {
+    const plate = gpath.slice("Metadata/".length, -".gcode".length);
+    return { plate, estimatedSeconds: readPlateEstimateSeconds(files, plate) };
+  });
+}
+
+/** Best-effort read of a plate's static print-time estimate from its
+ *  Metadata/{plate}.json sidecar (Bambu Studio slice-info format — field name
+ *  unconfirmed against every studio version, hence the two aliases and the
+ *  defensive try/catch: never throws, degrades to null). */
+function readPlateEstimateSeconds(files: Record<string, Uint8Array>, plate: string): number | null {
+  const raw = files[`Metadata/${plate}.json`];
+  if (!raw) return null;
+  try {
+    const json = JSON.parse(strFromU8(raw)) as { prediction?: unknown; gcode_prediction?: unknown };
+    const v = json.prediction ?? json.gcode_prediction;
+    return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.round(v) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Re-extract filament colours/types from project_settings.config (spec 5). */
 export function extractFilaments(threemf: Buffer): FilamentInfo[] {
   const files = unzipSync(threemf);

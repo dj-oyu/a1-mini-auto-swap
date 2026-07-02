@@ -496,4 +496,30 @@ describe("PATCH /api/queue/:id/filaments (spec ch8)", () => {
     expect((await patch(999999, { ams_mapping: [0, -1, -1, -1] })).status).toBe(404);
     expect((await patch("abc", { ams_mapping: [0, -1, -1, -1] })).status).toBe(404);
   });
+
+  describe("selected_plate (multi-plate 3mf upload)", () => {
+    test("stores the selected plate alongside the filament plan", async () => {
+      const id = repo.createJob({ filename: "multi.3mf" });
+      const res = await patch(id, { ams_mapping: [0, -1, -1, -1], selected_plate: "plate_24" });
+      expect(res.status).toBe(200);
+      expect(repo.getJob(id)?.selected_plate).toBe("plate_24");
+    });
+
+    test("omitting selected_plate leaves it unset (single-plate upload, unchanged behaviour)", async () => {
+      const id = repo.createJob({ filename: "single.3mf" });
+      const res = await patch(id, { ams_mapping: [0, -1, -1, -1] });
+      expect(res.status).toBe(200);
+      expect(repo.getJob(id)?.selected_plate).toBeNull();
+    });
+
+    test("400s for a malformed selected_plate value", async () => {
+      const id = repo.createJob({ filename: "p.3mf" });
+      for (const bad of ["plate1", "plate_", "1", "plate_-1", "../etc/passwd"]) {
+        const res = await patch(id, { ams_mapping: [0, -1, -1, -1], selected_plate: bad });
+        expect(res.status).toBe(400);
+      }
+      expect(repo.getJob(id)!.status).toBe("processing"); // still unconfirmed
+      expect(repo.getJob(id)!.selected_plate).toBeNull();
+    });
+  });
 });

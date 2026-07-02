@@ -26,6 +26,12 @@ const filamentsPatchSchema = z.object({
   filaments: z.array(z.unknown()).optional(),
   // undefined = leave as-is; null = unassign; number = must exist (checked vs DB below)
   project_id: z.number().int().nullish(),
+  // Multi-plate 3mf upload: which Metadata/plate_N.gcode to print. undefined =
+  // leave as-is (single-plate archives never send this).
+  selected_plate: z
+    .string()
+    .regex(/^plate_\d+$/, "selected_plate must look like plate_<N>")
+    .optional(),
 });
 
 const stockerSetSchema = z.object({
@@ -162,6 +168,7 @@ export function createWriteApp(deps: { repo: Repo; dispatcher: Dispatcher }): Ho
 
     repo.setFilamentPlan(id, body.data.ams_mapping, body.data.filaments);
     if (body.data.project_id !== undefined) repo.setProject(id, body.data.project_id);
+    if (body.data.selected_plate !== undefined) repo.setSelectedPlate(id, body.data.selected_plate);
     await dispatcher.enqueue(id); // processing → queued (spec ch6)
     for (const a of repo.getUnresolvedPendingActions()) {
       if (a.type === "filament_confirm" && a.job_id === id) repo.resolvePendingAction(a.id);

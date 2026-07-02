@@ -45,6 +45,10 @@ export interface JobRow {
   substituted_slot: number | null;
   substituted_color: string | null;
   filament_runout_policy_override: string | null;
+  /** Which Metadata/plate_N.gcode to print, for a multi-plate 3mf upload (e.g.
+   *  "plate_24"). NULL = unset — injectIntoThreemf auto-discovers the single
+   *  plate gcode (src/injection/threemf.ts). Set via PATCH /api/queue/:id/filaments. */
+  selected_plate: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { migrate } from "../../src/db/migrations.ts";
+import { MIGRATIONS, migrate } from "../../src/db/migrations.ts";
 import { openDb } from "../../src/db/index.ts";
 
 describe("migrations", () => {
@@ -19,12 +19,63 @@ describe("migrations", () => {
 
   test("migrate is idempotent and records applied ids", () => {
     const db = new Database(":memory:");
-    expect(migrate(db)).toEqual(["0001_init"]);
+    expect(migrate(db)).toEqual(["0001_init", "0002_selected_plate"]);
     expect(migrate(db)).toEqual([]); // second run applies nothing
     const applied = (db.query("SELECT id FROM schema_migrations").all() as { id: string }[]).map(
       (r) => r.id,
     );
-    expect(applied).toEqual(["0001_init"]);
+    expect(applied).toEqual(["0001_init", "0002_selected_plate"]);
+    db.close();
+  });
+
+  // Plate-selection (multi-plate 3mf upload): 0002_selected_plate must append
+  // a nullable column to an EXISTING jobs table (a DB that already ran
+  // 0001_init) without touching existing rows — append-only migration, no
+  // down migration, no rewrite of 0001_init.
+  test("0002_selected_plate adds a nullable column, applied idempotently to an existing DB", () => {
+    const db = new Database(":memory:");
+    // Simulate a DB that already ran 0001_init in a previous process (the
+    // append-only contract: 0001_init itself is never touched by this change).
+    db.run("PRAGMA foreign_keys = ON");
+    db.run(
+      `CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    );
+    db.run(MIGRATIONS[0]!.up);
+    db.query("INSERT INTO schema_migrations (id) VALUES (?)").run(MIGRATIONS[0]!.id);
+    const preExisting = db
+      .query("INSERT INTO jobs (filename) VALUES ('legacy.gcode.3mf') RETURNING id")
+      .get() as { id: number };
+
+    // only the NEW migration runs — 0001_init is already recorded as applied
+    expect(migrate(db)).toEqual(["0002_selected_plate"]);
+
+    const cols = (db.query("PRAGMA table_info(jobs)").all() as { name: string }[]).map((c) => c.name);
+    expect(cols).toContain("selected_plate");
+
+    // the pre-existing row survived the ALTER TABLE with a NULL default
+    const row = db.query("SELECT selected_plate FROM jobs WHERE id=?").get(preExisting.id) as {
+      selected_plate: string | null;
+    };
+    expect(row.selected_plate).toBeNull();
+
+    // a valid plate id can be written and round-trips
+    db.query("UPDATE jobs SET selected_plate=? WHERE id=?").run("plate_24", preExisting.id);
+    expect(
+      (db.query("SELECT selected_plate FROM jobs WHERE id=?").get(preExisting.id) as { selected_plate: string }).selected_plate,
+    ).toBe("plate_24");
+
+    // re-running migrate is a no-op
+    expect(migrate(db)).toEqual([]);
+    db.close();
+  });
+
+  test("the selected_plate CHECK rejects a malformed value", () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    const id = (db.query("INSERT INTO jobs (filename) VALUES ('x.3mf') RETURNING id").get() as {
+      id: number;
+    }).id;
+    expect(() => db.query("UPDATE jobs SET selected_plate=? WHERE id=?").run("not-a-plate", id)).toThrow();
     db.close();
   });
 });

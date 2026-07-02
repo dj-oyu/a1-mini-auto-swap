@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
-import { extractFilaments, injectIntoThreemf } from "../../src/injection/threemf.ts";
+import { extractFilaments, injectIntoThreemf, listPlates } from "../../src/injection/threemf.ts";
 import { gcodeMd5 } from "../../src/injection/md5.ts";
 
 const PLATE_GCODE = [
@@ -105,5 +105,75 @@ describe("injectIntoThreemf (spec 7)", () => {
   test("throws a clear error when the archive has no plate gcode at all", () => {
     const noGcode = Buffer.from(zipSync({ "3D/3dmodel.model": strToU8("<model/>") }));
     expect(() => injectIntoThreemf(noGcode, { endSnippet: "M400" })).toThrow(/no Metadata\/plate_N\.gcode/);
+  });
+
+  test("plate: injects into the explicitly-selected plate of a multi-plate archive", () => {
+    const threemf = Buffer.from(
+      zipSync({
+        "Metadata/plate_1.gcode": strToU8(PLATE_GCODE),
+        "Metadata/plate_1.gcode.md5": strToU8("stale-1"),
+        "Metadata/plate_24.gcode": strToU8(PLATE_GCODE),
+        "Metadata/plate_24.gcode.md5": strToU8("stale-24"),
+        "3D/3dmodel.model": strToU8("<model/>"),
+      }),
+    );
+    const result = injectIntoThreemf(threemf, { plate: "plate_24", endSnippet: "M400" });
+    expect(result.param).toBe("Metadata/plate_24.gcode");
+    expect(result.warnings).toHaveLength(0); // explicit plate → no "multiple plates" warning
+    const files = unzipSync(result.bytes);
+    expect(strFromU8(files["Metadata/plate_24.gcode"]!)).toContain("M400");
+    expect(strFromU8(files["Metadata/plate_24.gcode.md5"]!)).toBe(result.md5);
+    // the OTHER plate's gcode/md5 are untouched
+    expect(strFromU8(files["Metadata/plate_1.gcode"]!)).toBe(PLATE_GCODE);
+    expect(strFromU8(files["Metadata/plate_1.gcode.md5"]!)).toBe("stale-1");
+  });
+});
+
+describe("listPlates (multi-plate 3mf upload — plate selection)", () => {
+  test("lists every plate gcode entry, sorted, with a static estimate when present", () => {
+    const threemf = Buffer.from(
+      zipSync({
+        "Metadata/plate_1.gcode": strToU8(PLATE_GCODE),
+        "Metadata/plate_1.json": strToU8(JSON.stringify({ prediction: 3600 })),
+        "Metadata/plate_24.gcode": strToU8(PLATE_GCODE),
+        // no plate_24.json
+        "3D/3dmodel.model": strToU8("<model/>"),
+      }),
+    );
+    expect(listPlates(threemf)).toEqual([
+      { plate: "plate_1", estimatedSeconds: 3600 },
+      { plate: "plate_24", estimatedSeconds: null },
+    ]);
+  });
+
+  test("accepts the gcode_prediction field name too", () => {
+    const threemf = Buffer.from(
+      zipSync({
+        "Metadata/plate_1.gcode": strToU8(PLATE_GCODE),
+        "Metadata/plate_1.json": strToU8(JSON.stringify({ gcode_prediction: 1800 })),
+        "3D/3dmodel.model": strToU8("<model/>"),
+      }),
+    );
+    expect(listPlates(threemf)).toEqual([{ plate: "plate_1", estimatedSeconds: 1800 }]);
+  });
+
+  test("a malformed/unparseable plate_N.json degrades to null, never throws", () => {
+    const threemf = Buffer.from(
+      zipSync({
+        "Metadata/plate_1.gcode": strToU8(PLATE_GCODE),
+        "Metadata/plate_1.json": strToU8("not json"),
+        "3D/3dmodel.model": strToU8("<model/>"),
+      }),
+    );
+    expect(listPlates(threemf)).toEqual([{ plate: "plate_1", estimatedSeconds: null }]);
+  });
+
+  test("a single-plate archive returns a 1-element array", () => {
+    expect(listPlates(makeThreemf())).toEqual([{ plate: "plate_1", estimatedSeconds: null }]);
+  });
+
+  test("an archive with no plate gcode returns an empty array", () => {
+    const noGcode = Buffer.from(zipSync({ "3D/3dmodel.model": strToU8("<model/>") }));
+    expect(listPlates(noGcode)).toEqual([]);
   });
 });
