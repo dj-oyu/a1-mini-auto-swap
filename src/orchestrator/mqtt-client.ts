@@ -18,6 +18,18 @@ export interface ProjectFileParams {
   amsMapping: number[]; // MUST be 4 elements (INV-MQTT-01)
   useAms?: boolean;
   sequenceId?: string;
+  /** Echoed back by the firmware as subtask_name — the monitor's correlation
+   *  key. 実測 2026-07-02: explicitly setting it is accepted by real firmware
+   *  (probe V1) and makes correlation independent of the url basename. */
+  subtaskName?: string;
+  /** Calibration/aux flags (spec 9). All default false — the dry-rehearsal /
+   *  eject jobs must not calibrate; real plate prints opt in per job. The
+   *  实測-proven command shape includes these fields explicitly. */
+  bedLeveling?: boolean;
+  flowCali?: boolean;
+  vibrationCali?: boolean;
+  timelapse?: boolean;
+  layerInspect?: boolean;
 }
 
 export interface MqttClientOptions {
@@ -87,7 +99,14 @@ export class OrchestratorMqttClient extends EventEmitter {
     if (!p) return;
 
     if (typeof p.result === "string") {
-      this.emit("ack", { command: p.command, result: p.result, sequenceId: p.sequence_id });
+      // Always log command acks — a rejected project_file used to fail in
+      // total silence (実測 2026-07-02: the Stage 5 "uploaded but nothing
+      // happens" hour). Low volume: one line per command sent.
+      console.log(
+        `[mqtt] ack ${String(p.command)} → ${p.result}` +
+          (p.reason !== undefined && p.reason !== p.result ? ` (reason=${String(p.reason)})` : ""),
+      );
+      this.emit("ack", { command: p.command, result: p.result, sequenceId: p.sequence_id, reason: p.reason });
       return;
     }
     if (p.gcode_state !== undefined) {
@@ -108,14 +127,22 @@ export class OrchestratorMqttClient extends EventEmitter {
   }
 
   publishProjectFile(params: ProjectFileParams): void {
+    // Field set proven against real firmware (実測 2026-07-02 probe V1:
+    // ack success → PREPARE → RUNNING with exactly this shape).
     this.publish({
       print: {
         command: "project_file",
         sequence_id: params.sequenceId ?? "0",
         param: params.param,
         url: params.url,
+        ...(params.subtaskName !== undefined ? { subtask_name: params.subtaskName } : {}),
         use_ams: params.useAms ?? true,
         ams_mapping: params.amsMapping,
+        timelapse: params.timelapse ?? false,
+        bed_leveling: params.bedLeveling ?? false,
+        flow_cali: params.flowCali ?? false,
+        vibration_cali: params.vibrationCali ?? false,
+        layer_inspect: params.layerInspect ?? false,
       },
     });
   }

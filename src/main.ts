@@ -166,6 +166,8 @@ async function startDryRun(): Promise<void> {
     amsMapping: [-1, -1, -1, -1], // motion only — no filament use
     useAms: false,
     sequenceId: "dry-rehearsal",
+    subtaskName: DRY_REHEARSAL_ARTIFACT,
+    // motion test: no calibration (bed_leveling etc. default false)
   });
 }
 

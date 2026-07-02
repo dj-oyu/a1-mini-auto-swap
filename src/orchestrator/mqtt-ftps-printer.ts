@@ -58,6 +58,12 @@ export class MqttFtpsPrinter implements PrinterPort {
       url: artifact.url,
       amsMapping: artifact.amsMapping,
       sequenceId: String(job.id),
+      // Explicit subtask_name = the monitor's correlation key (job-{id}.…),
+      // no longer dependent on how firmware derives it from the url.
+      subtaskName: artifact.remoteName,
+      // A fresh plate just landed on the bed — re-level. Flow/vibration cali
+      // per plate would burn minutes each swap cycle; leave them off.
+      bedLeveling: true,
     });
   }
 
@@ -85,6 +91,8 @@ export class MqttFtpsPrinter implements PrinterPort {
       amsMapping: [-1, -1, -1, -1], // no filament use — motion only
       useAms: false,
       sequenceId: "eject",
+      subtaskName: EJECT_ARTIFACT_NAME, // outside job-{id} → never attributed to a queue row
+      // motion-only recovery: no calibration of any kind
     });
   }
 
