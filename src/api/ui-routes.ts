@@ -115,7 +115,8 @@ export function createUiApp(deps: { repo: Repo; cacheDir: string }): Hono {
     const id = Number(c.req.param("id"));
     const job = Number.isInteger(id) && id > 0 ? repo.getJob(id) : null;
     const plates = job ? readCachedPlates(job.id) : [];
-    return c.html(renderConfirmPanel(job, repo.listProjects(), plates));
+    const previewPlates = job ? readCachedPreviewPlates(job.id) : [];
+    return c.html(renderConfirmPanel(job, repo.listProjects(), plates, previewPlates));
   });
 
   // GET /ui/stocker/config — the stocker capacity config modal (spec 11).
@@ -476,7 +477,12 @@ function renderPlateSelect(plates: PlateInfo[], selected: string | null): Html {
  *  dropdown. Submitting PATCHes /api/queue/:id/filaments (client-side, see
  *  LIVE_SCRIPT) and moves the job processing→queued. The last line of defense
  *  against a wrong mapping, so it leans on color, not just text. */
-function renderConfirmPanel(job: JobRow | null, projects: ProjectRow[] = [], plates: PlateInfo[] = []): Html {
+function renderConfirmPanel(
+  job: JobRow | null,
+  projects: ProjectRow[] = [],
+  plates: PlateInfo[] = [],
+  previewPlates: PreviewPlate[] = [],
+): Html {
   if (!job) {
     return html`<div class="modal-overlay" data-close><div class="modal-box"${MODAL_BOX_A11Y}>ジョブが見つかりません。<div class="modal-actions"><button class="act" data-close>閉じる</button></div></div></div>`;
   }
@@ -515,7 +521,8 @@ function renderConfirmPanel(job: JobRow | null, projects: ProjectRow[] = [], pla
       <div class="modal-box"${MODAL_BOX_A11Y}>
         <h2 class="modal-title">フィラメント確認</h2>
         <p class="muted">${job.filename}</p>
-        ${renderViewer(job.id, filaments[0]?.color, plates.length > 1)}
+        ${previewPlates.length > 1 ? renderPlateTabs(previewPlates, previewPlates[0]!.plate) : ""}
+        ${renderViewer(job.id, filaments[0]?.color, previewPlates.length > 0, false, previewPlates[0]?.plate)}
         ${plates.length > 1 ? renderPlateSelect(plates, job.selected_plate) : ""}
         <div class="fil-list">${rows}</div>
         <label class="proj-assign">プロジェクト
