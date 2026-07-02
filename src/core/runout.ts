@@ -10,6 +10,8 @@
 //   Tier 2  allow_material_match — same type, color may differ (=> substitution)
 //   Tier 3  manual              — always a pending action
 
+import { sameColor } from "./color.ts";
+
 export type RunoutPolicy = "manual" | "same_color_only" | "allow_material_match";
 
 export interface AmsTray {
@@ -45,8 +47,8 @@ export function resolveRunout(ctx: RunoutContext): RunoutResolution {
 
   let match: AmsTray | undefined;
   if (ctx.policy === "same_color_only") {
-    // Tier 1: same type AND same color (INV-RUNOUT-03)
-    match = candidates.find((t) => t.type === runout.type && t.color === runout.color);
+    // Tier 1: same type AND same color (INV-RUNOUT-03) — notation-insensitive
+    match = candidates.find((t) => t.type === runout.type && sameColor(t.color, runout.color));
   } else {
     // Tier 2: same type, most remaining first; color may differ (INV-RUNOUT-04)
     match = candidates
@@ -56,7 +58,8 @@ export function resolveRunout(ctx: RunoutContext): RunoutResolution {
 
   if (!match) return { kind: "pending", reason: "no_candidate" }; // INV-RUNOUT-05
 
-  // substitution recorded iff the landed color differs (INV-RUNOUT-06)
-  const substitutedColor = match.color !== runout.color ? match.color : null;
+  // substitution recorded iff the landed color ACTUALLY differs — notation
+  // variance alone must not raise a false ⚠色代替 (INV-RUNOUT-06)
+  const substitutedColor = sameColor(match.color, runout.color) ? null : match.color;
   return { kind: "switch", toSlot: match.slot, substitutedColor };
 }
