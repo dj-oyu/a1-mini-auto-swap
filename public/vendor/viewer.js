@@ -100,7 +100,6 @@ function ensureContext(el) {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xf6f7f9);
   const group = new THREE.Group();
-  group.rotation.x = -Math.PI / 2; // 3MF is Z-up; tilt to a pleasant 3/4 view
   scene.add(group);
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.6));
@@ -112,7 +111,10 @@ function ensureContext(el) {
   scene.add(fill);
 
   const camera = new THREE.PerspectiveCamera(45, width / height, 0.5, 5000);
-  camera.position.set(0, 0, 100);
+  // 3MF / print space is Z-up. Keep the model upright and view it from a
+  // front-3/4 angle looking slightly down (the conventional slicer view),
+  // instead of laying the part flat and staring at the bed edge-on.
+  camera.up.set(0, 0, 1);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -121,9 +123,13 @@ function ensureContext(el) {
   el.appendChild(renderer.domElement);
   el.classList.add("viewer-live");
 
+  // unit direction from the model centre to the camera: front, off to one side,
+  // ~30° above the bed → a readable 3/4 view of an upright part.
+  const VIEW_DIR = new THREE.Vector3(0.55, -1, 0.6).normalize();
   const ctx = { renderer, scene, camera, group, mesh: null, material: null, radius: 50, dist: 130 };
   ctx.render = () => {
-    camera.position.z = ctx.dist;
+    camera.position.copy(VIEW_DIR).multiplyScalar(ctx.dist);
+    camera.lookAt(0, 0, 0);
     renderer.render(scene, camera);
   };
 
