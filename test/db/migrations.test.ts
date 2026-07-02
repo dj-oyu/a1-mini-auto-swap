@@ -28,3 +28,25 @@ describe("migrations", () => {
     db.close();
   });
 });
+
+// First-boot regression: DB_PATH points into a directory that does not exist
+// yet (e.g. ./data/orchestrator.sqlite on a fresh checkout). openDb must
+// create the parent directory instead of dying with SQLITE_CANTOPEN.
+import { openDb as openDbForBootstrap } from "../../src/db/index.ts";
+import { existsSync, rmSync } from "node:fs";
+import { join as joinPath } from "node:path";
+import { tmpdir as osTmpdir } from "node:os";
+
+test("openDb creates missing parent directories for a file-backed DB (first boot)", () => {
+  const base = joinPath(osTmpdir(), `db-boot-${process.pid}-${Math.random().toString(36).slice(2)}`);
+  const path = joinPath(base, "nested", "orchestrator.sqlite");
+  try {
+    const { repo, close } = openDbForBootstrap(path);
+    repo.setStocker(10, 10);
+    expect(repo.getStocker()!.capacity).toBe(10);
+    close();
+    expect(existsSync(path)).toBe(true);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
