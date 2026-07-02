@@ -97,6 +97,19 @@ Windows ラップトップ上のオーケストレーター/診断から実 A1 m
   LIST はどこでも成功するため、診断が緑でもアップロードだけ死ぬ、という紛らわしい症状になる。
   フェーズログ（`session open: TLS+login ok (+899ms)` の後に body done が出ない）で特定。
   スタブは basename に正規化するのでこの差を検出できない（スタブ強化の余地）。
+- **★PROT P アップロードは close_notify 必須**（生TLSレコード観測＋厳格模倣サーバーで機序を実証）。
+  実機はデータ接続が close_notify なしで FIN されると転送を「途中切断」とみなし **226 を返さない**。
+  curl（schannel、close_notify送信）は成功、Bun+basic-ftp は常にハング。
+- **⚠Bun の TLS 制約 2 点**（Bun 1.3.14 時点、要追跡）:
+  (1) `TLSSocket.end()` が **close_notify を送らない**（素のFINのみ。生レコード:
+  `handshake ccs appdata… → FIN`、ALERTレコード無し）。
+  (2) `tls.connect`/`createServer` の **`minVersion`/`maxVersion` を無視**する
+  （1.2固定を指定しても制御接続は TLS1.3 でネゴした）。
+  → 対策: アップロードは **PROT C ＋ 平文データチャネル**の自前エンジン
+  （`src/orchestrator/ftps-transfer.ts`）。平文なら FIN が正当な終端で、close_notify 問題を
+  構造的に回避。制御チャネルは TLS のまま（認証情報は保護）。EPSV は実機 502 のため PASV のみ。
+- **EPSV は 502 で拒否**（curl 実測）。basic-ftp の EPSV→PASV フォールバックは正常動作を確認。
+- 実機の制御応答はテキスト部が空（`226 `、`502 ` 等）。パーサはコード+空白のみで解釈すること。
 
 ### MQTT / report
 - `pushall` でフルダンプ取得可。`tray_color` は **"RRGGBBAA"**（`FFFFFFFF` 等、'#'なし・α付き）

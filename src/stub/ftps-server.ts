@@ -1,4 +1,10 @@
-import type { AddressInfo } from "node:net";
+import {
+  connect as netConnect,
+  createServer as netCreateServer,
+  type AddressInfo,
+  type Server as NetServer,
+  type Socket,
+} from "node:net";
 import {
   createServer as tlsCreateServer,
   type Server as TlsServer,
@@ -21,11 +27,13 @@ import { ensureCerts } from "./tls.ts";
  *   (`Path(arg).name`) — no directory traversal — capped at 4GiB.
  * - PROT P is accepted ("200 ... Private").
  * - ⚠️ PROT C is ALSO accepted here (INV-FTPS-05) — the intentional A1-specific
- *   deviation from bambuddy (which replies "536"). Note: TLS-capable FTPS
- *   clients (e.g. basic-ftp) reuse the control TLS session on the data channel
- *   regardless of PROT, so the stub secures the data channel when the client
- *   initiates TLS on it. A genuinely plaintext-only PROT C client would need
- *   sniff-based downgrade, tracked as a future refinement.
+ *   deviation from bambuddy (which replies "536").
+ * - The data channel supports BOTH plaintext and TLS clients via a first-byte
+ *   sniff (0x16 = TLS handshake → looped through an internal TLS listener;
+ *   anything else → treated as plaintext). This matches the orchestrator's
+ *   in-process PROT C uploader (plain data socket — Bun's TLSSocket cannot
+ *   send close_notify, 実測 2026-07-02) while keeping TLS-wrapping clients
+ *   (basic-ftp under PROT P) working.
  */
 export interface FtpsServerOptions {
   certDir: string;
@@ -41,8 +49,8 @@ interface ConnState {
   user: string;
   authed: boolean;
   prot: "C" | "P";
-  dataListener: TlsServer | null;
-  dataSocket: Promise<TLSSocket> | null;
+  dataListener: NetServer | null;
+  dataSocket: Promise<Socket | TLSSocket> | null;
 }
 
 export class StubFtpsServer {
@@ -50,7 +58,7 @@ export class StubFtpsServer {
   private key: Buffer | null = null;
   private cert: Buffer | null = null;
   private readonly controls = new Set<TLSSocket>();
-  private readonly dataListeners = new Set<TlsServer>();
+  private readonly dataListeners = new Set<NetServer | TlsServer>();
   private readonly uploaded: string[] = [];
 
   constructor(private readonly opts: FtpsServerOptions) {}
@@ -243,10 +251,18 @@ export class StubFtpsServer {
 
   // ── passive data channel ────────────────────────────────────────────────────
 
-  /** Open a fresh passive data listener; returns the bound port. The data
-   *  connection is TLS (a tls.createServer, the same Bun-supported path as the
-   *  control listener) because TLS-capable clients secure the data channel by
-   *  reusing the control session regardless of PROT. */
+  /** Open a fresh passive data listener; returns the bound port.
+   *
+   *  The listener is a PLAIN TCP server that sniffs the first byte of the
+   *  incoming connection:
+   *   - 0x16 (TLS handshake record) → the client is TLS-wrapping the data
+   *     channel (basic-ftp under PROT P). The raw stream is looped through an
+   *     ephemeral internal tls.createServer (server-side TLSSocket upgrade is
+   *     not reliable under Bun; the loopback proxy is).
+   *   - anything else → genuine plaintext data (the orchestrator's PROT C
+   *     uploader). Real 3mf payloads start with "PK" (0x50), so the sniff is
+   *     unambiguous for our traffic.
+   */
   private openPassive(state: ConnState): Promise<number> {
     if (state.dataListener) {
       this.dataListeners.delete(state.dataListener);
@@ -254,15 +270,42 @@ export class StubFtpsServer {
       state.dataListener = null;
     }
 
-    let resolveSock!: (s: TLSSocket) => void;
-    state.dataSocket = new Promise<TLSSocket>((res) => {
+    let resolveSock!: (s: Socket | TLSSocket) => void;
+    state.dataSocket = new Promise<Socket | TLSSocket>((res) => {
       resolveSock = res;
     });
 
-    const listener = tlsCreateServer(
-      { key: this.key!, cert: this.cert!, ...TLS_VERSION, ciphers: TLS_CIPHERS },
-      (sock) => resolveSock(sock),
-    );
+    const listener = netCreateServer((raw: Socket) => {
+      raw.once("data", (first: Buffer) => {
+        if (first[0] === 0x16) {
+          // TLS client → loop through an internal TLS listener.
+          const tlsInner = tlsCreateServer(
+            { key: this.key!, cert: this.cert!, ...TLS_VERSION, ciphers: TLS_CIPHERS },
+            (tsock) => {
+              this.dataListeners.delete(tlsInner);
+              tlsInner.close();
+              resolveSock(tsock);
+            },
+          );
+          this.dataListeners.add(tlsInner);
+          tlsInner.listen(0, "127.0.0.1", () => {
+            const port = (tlsInner.address() as AddressInfo).port;
+            const up = netConnect(port, "127.0.0.1");
+            up.on("connect", () => up.write(first));
+            raw.pipe(up);
+            up.pipe(raw);
+            raw.on("error", () => up.destroy());
+            up.on("error", () => raw.destroy());
+          });
+        } else {
+          // Plaintext client → hand the socket over with the first chunk
+          // pushed back so the receiver sees the full payload.
+          raw.pause();
+          raw.unshift(first);
+          resolveSock(raw);
+        }
+      });
+    });
     this.dataListeners.add(listener);
     state.dataListener = listener;
 
@@ -310,8 +353,8 @@ export class StubFtpsServer {
   }
 }
 
-/** Stream a data socket to `target`, chunked, enforcing the 4GiB cap. */
-function receiveTo(sock: TLSSocket, target: string): Promise<void> {
+/** Stream a data socket (plain or TLS) to `target`, chunked, 4GiB cap. */
+function receiveTo(sock: Socket | TLSSocket, target: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const ws = createWriteStream(target);
     let total = 0;
@@ -338,6 +381,7 @@ function receiveTo(sock: TLSSocket, target: string): Promise<void> {
     ws.on("error", (e) => {
       if (!aborted) reject(e);
     });
+    sock.resume(); // the plaintext path hands the socket over paused
   });
 }
 
