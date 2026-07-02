@@ -22,7 +22,10 @@ export interface OrchestratorDeps {
   repo: Repo;
   printer: PrinterPort;
   notifier: Notifier;
-  gateway: PrintfarmGateway;
+  /** printfarm/* republish gateway (spec 16). Optional: when the deployment has
+   *  no Mosquitto broker configured (e.g. dev/test), the gateway is omitted and
+   *  the printfarm/* republish + progress publish are simply skipped. */
+  gateway?: PrintfarmGateway;
   status: OrchestratorMqttClient;
   retryLimit?: number;
   lowStockThreshold?: number;
@@ -36,7 +39,7 @@ export interface Orchestrator {
 }
 
 export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
-  const republishQueue = () => deps.gateway.publishQueue(toQueueSnapshot(deps.repo));
+  const republishQueue = () => deps.gateway?.publishQueue(toQueueSnapshot(deps.repo));
 
   // Republish the retained queue snapshot on every dispatcher NOTIFY. The
   // dispatcher notifies AFTER it has changed state (success/fail/pending), so
@@ -53,11 +56,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   monitor.start();
 
   // Live progress reflects the printer's status directly (safe to publish on
-  // the raw status event).
-  deps.status.on("status", (s: PrinterStatus) => {
-    const progress = toProgressView(s, deps.repo);
-    if (progress) deps.gateway.publishProgress(progress);
-  });
+  // the raw status event). No-op when there's no gateway configured.
+  if (deps.gateway) {
+    const gateway = deps.gateway;
+    deps.status.on("status", (s: PrinterStatus) => {
+      const progress = toProgressView(s, deps.repo);
+      if (progress) gateway.publishProgress(progress);
+    });
+  }
 
   republishQueue(); // initial snapshot
   return { dispatcher, monitor, republishQueue };
