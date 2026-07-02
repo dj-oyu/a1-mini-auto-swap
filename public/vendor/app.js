@@ -64,6 +64,15 @@
     document.body.addEventListener('click', function (e) {
       if (e.target.hasAttribute && e.target.hasAttribute('data-close')) { closeModal(); return; }
 
+      // camera modal: reload the snapshot with a cache-buster
+      var snapBtn = e.target.closest && e.target.closest('[data-snap-refresh]');
+      if (snapBtn) {
+        var img = document.querySelector('#modal .snapshot');
+        var none = document.querySelector('#modal .snapshot-none');
+        if (img) { img.hidden = false; if (none) none.hidden = true; img.src = '/api/printer/snapshot?t=' + Date.now(); }
+        return;
+      }
+
       // card action: reorder (↑/↓) — swap with the adjacent card, persist order
       var up = e.target.closest && e.target.closest('[data-move-up]');
       var down = e.target.closest && e.target.closest('[data-move-down]');
