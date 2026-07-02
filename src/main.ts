@@ -18,9 +18,10 @@ import { MqttFtpsPrinter, type ArtifactResolver } from "./orchestrator/mqtt-ftps
 import { PrintfarmGateway, MqttPublisherClient } from "./orchestrator/gateway.ts";
 import { WebhookNotifier } from "./orchestrator/webhook-notifier.ts";
 import { CompositeNotifier } from "./core/composite-notifier.ts";
+import { EscalationService } from "./core/escalation.ts";
 import { createOrchestrator } from "./orchestrator/orchestrator.ts";
 import { injectIntoThreemf } from "./injection/threemf.ts";
-import type { Notifier } from "./core/ports.ts";
+import { systemClock, type Notifier } from "./core/ports.ts";
 
 // Orchestrator entrypoint (spec 3): wires every adapter from env config into the
 // running core loop, and serves the HTTP API. Thin — the assembly logic lives
@@ -96,6 +97,13 @@ const orch = createOrchestrator({
   lowStockThreshold: num("STOCKER_LOW_THRESHOLD", 1),
 });
 
+// spec 13 escalation: re-notify unresolved blocking_queue pending actions every
+// ESCALATION_INTERVAL_MIN until a human resolves them (INV-PENDING-03/05).
+const escalation = new EscalationService(repo, notifier, systemClock, {
+  intervalMs: num("ESCALATION_INTERVAL_MIN", 30) * 60_000,
+});
+const escalationTimer = setInterval(() => escalation.tick(), 60_000);
+
 // Push live progress to browsers over SSE on every observed status update, so the
 // printing header updates without polling (spec 10 / 17 §7).
 mqtt.on("status", (s) => sse.sendProgress(printerStatusView(repo.listByStatus("printing")[0] ?? null, s)));
@@ -130,6 +138,7 @@ console.log(`  HTTP API  http://0.0.0.0:${server.port}`);
 
 const shutdown = async () => {
   server.stop(true);
+  clearInterval(escalationTimer);
   orch.monitor.stop();
   await mqtt.close();
   process.exit(0);
