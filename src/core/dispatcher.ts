@@ -7,6 +7,10 @@ export interface DispatcherOptions {
   retryLimit?: number;
   /** Notification sink (spec 13/15). Optional; no-op when absent. */
   notifier?: Notifier;
+  /** Warn (advisory) as soon as a swap leaves the stocker at/below this many
+   *  spare plates — so a human can refill before the queue actually stalls.
+   *  Default 1 (warn at "1 spare left", then again at "last plate on the bed"). */
+  lowStockThreshold?: number;
 }
 
 export type DispatchOutcome =
@@ -27,6 +31,7 @@ export type DispatchOutcome =
 export class Dispatcher {
   private readonly retryLimit: number;
   private readonly notifier?: Notifier;
+  private readonly lowStockThreshold: number;
 
   constructor(
     private readonly repo: QueueStore,
@@ -35,6 +40,26 @@ export class Dispatcher {
   ) {
     this.retryLimit = opts.retryLimit ?? 3;
     this.notifier = opts.notifier;
+    this.lowStockThreshold = opts.lowStockThreshold ?? 1;
+  }
+
+  /** Consume one stocker plate on a swap and, when that leaves the stocker at or
+   *  below the low-water mark, emit an advisory heads-up (spec 13: cry-wolf
+   *  hygiene — a whisper before the queue-stopping stocker_refill). Fires once
+   *  per level since `remaining` decreases monotonically between refills. */
+  private swapPlate(): void {
+    this.repo.decrementStocker();
+    const s = this.repo.getStocker();
+    if (s && s.remaining <= this.lowStockThreshold) {
+      this.notifier?.notify({
+        type: "stocker_low",
+        severity: "advisory",
+        message:
+          s.remaining === 0
+            ? "最後のビルドプレートをベッドに載せました。補充してください"
+            : `ビルドプレート残り${s.remaining}枚です。補充してください`,
+      });
+    }
   }
 
   /** processing -> queued (after filament confirmation). */
@@ -78,7 +103,7 @@ export class Dispatcher {
   async onFinished(jobId: number): Promise<void> {
     const job = this.repo.getJob(jobId);
     this.repo.updateStatus(jobId, "success");
-    this.repo.decrementStocker();
+    this.swapPlate();
     this.notifier?.notify({ type: "job_finished", jobId }); // spec 15 (INV-NOTIFY-01)
     if (job) this.applyColorConsistency(job);
     await this.dispatchNext();
@@ -125,7 +150,7 @@ export class Dispatcher {
     this.repo.updateStatus(jobId, "failed", error);
     this.repo.incrementAttempts(jobId);
     await this.printer.ejectAndReset();
-    this.repo.decrementStocker();
+    this.swapPlate();
     this.repo.createPendingAction({
       type: "retry_decision",
       severity: "blocking_job",
@@ -145,7 +170,7 @@ export class Dispatcher {
     if (!job || job.status !== "printing") return false;
     await this.printer.ejectAndReset();
     this.repo.updateStatus(jobId, "aborted");
-    this.repo.decrementStocker();
+    this.swapPlate();
     this.notifier?.notify({ type: "aborted", jobId });
     await this.dispatchNext();
     return true;

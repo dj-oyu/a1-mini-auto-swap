@@ -25,6 +25,7 @@ export interface OrchestratorDeps {
   gateway: PrintfarmGateway;
   status: OrchestratorMqttClient;
   retryLimit?: number;
+  lowStockThreshold?: number;
 }
 
 export interface Orchestrator {
@@ -46,6 +47,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const dispatcher = new Dispatcher(deps.repo, deps.printer, {
     notifier,
     retryLimit: deps.retryLimit,
+    lowStockThreshold: deps.lowStockThreshold,
   });
   const monitor = new Monitor(deps.status, deps.repo, dispatcher);
   monitor.start();

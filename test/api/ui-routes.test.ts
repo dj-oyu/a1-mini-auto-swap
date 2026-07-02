@@ -396,6 +396,13 @@ describe("GET / (dashboard SSR)", () => {
       // the old fixed 10s poll interval is gone (SSE-driven now)
       expect(r.text).not.toContain("setInterval(pollStatus, 10000)");
     });
+
+    test("build-plate low: a toast mount + a stocker_low SSE handler", async () => {
+      const r = await body();
+      expect(r.text).toContain('id="toast"');
+      expect(r.text).toContain("es.addEventListener('stocker_low'");
+      expect(r.text).toContain("showToast");
+    });
   });
 
   describe("live updates (MVP #3)", () => {
