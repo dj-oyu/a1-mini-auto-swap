@@ -61,9 +61,16 @@ export class Monitor {
     }
   }
 
+  /** Correlate a report's subtask_name to the DB job it belongs to, STRICTLY by
+   *  the job-{id}. prefix. No "single printing job" fallback: a non-queue
+   *  artifact (eject.gcode.3mf, dry-rehearsal.gcode.3mf) whose FINISH/FAILED
+   *  arrives while a real job is 'printing' must NOT be misattributed to that
+   *  job (審 2026-07-02 — the fallback let an eject's FINISH fire onFinished on
+   *  an unrelated print: bad stocker accounting + false completion). If nothing
+   *  matches, return null and the monitor does nothing. */
   private currentJob(subtask: string): { id: number } | null {
     const printing = this.store.listByStatus("printing");
-    return printing.find((j) => subtask.includes(jobSubtaskPrefix(j.id))) ?? printing[0] ?? null;
+    return printing.find((j) => subtask.includes(jobSubtaskPrefix(j.id))) ?? null;
   }
 }
 

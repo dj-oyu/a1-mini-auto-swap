@@ -343,6 +343,7 @@ app.route(
     printerStatus: () => printerStatusView(repo.listByStatus("printing")[0] ?? null, mqtt.latest()),
     startDryRun,
     eject: () => printer.ejectAndReset(),
+    hasPrintingJob: () => repo.listByStatus("printing").length > 0,
     // TEMPORARY (task#16):
     testSnapshot: () => cameraRelay.snapshot(10_000),
     sendPhotoReport: tempSendPhotoReport,

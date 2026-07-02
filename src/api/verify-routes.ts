@@ -37,6 +37,10 @@ export interface VerifyDeps {
   startDryRun: (includeSwap: boolean) => Promise<void>;
   /** stop + eject job (Stage 6). */
   eject: () => Promise<void>;
+  /** True when a real queue job is currently 'printing' — Stage 6's raw eject
+   *  is refused then (審 2026-07-02: it bypasses the dispatcher and would
+   *  desync/misattribute against a live queue print). */
+  hasPrintingJob?: () => boolean;
 
   // ── TEMPORARY (実機検証用 — 確認後に削除, task#16) ──────────────────────────
   // swap直前スナップショット+Discord写真付き報告のフィールドテスト。全て任意:
@@ -246,8 +250,15 @@ export function createVerifyApp(deps: VerifyDeps): Hono {
     return c.json({ ok: true });
   });
 
-  // Stage 6: stop + eject.
+  // Stage 6: stop + eject. Refuse if a REAL queue job is printing — this raw
+  // eject bypasses the dispatcher, so firing it during a queue print would
+  // desync the DB and (before the strict-attribution fix) misattribute the
+  // eject's FINISH to that job. Stage 6 is meant to abort the Stage 5
+  // dry-rehearsal, which is NOT a DB job — so no printing job = allowed.
   app.post("/api/verify/eject", async (c) => {
+    if (deps.hasPrintingJob?.()) {
+      return c.json({ error: "実キュージョブが印刷中です。中止はダッシュボードの中止ボタンを使ってください" }, 409);
+    }
     await deps.eject();
     return c.json({ ok: true });
   });
