@@ -7,6 +7,7 @@ import { StubMqttServer } from "../../src/stub/mqtt-server.ts";
 import { StubFtpsServer } from "../../src/stub/ftps-server.ts";
 import { OrchestratorMqttClient } from "../../src/orchestrator/mqtt-client.ts";
 import { MqttFtpsPrinter, type ArtifactResolver } from "../../src/orchestrator/mqtt-ftps-printer.ts";
+import { buildEjectThreemf } from "../../src/injection/eject-threemf.ts";
 import type { JobRow } from "../../src/db/types.ts";
 
 const SERIAL = "STUB0003";
@@ -19,6 +20,7 @@ let ftpsServer: StubFtpsServer;
 let client: OrchestratorMqttClient;
 let port: MqttFtpsPrinter;
 let uploadDir: string;
+let ftpsPort: number;
 
 const resolver: ArtifactResolver = (job) => ({
   bytes: Buffer.from(`dummy 3mf for job ${job.id}`),
@@ -38,7 +40,7 @@ beforeAll(async () => {
   mqttServer = new StubMqttServer(printer, { port: 0, certDir: CERT_DIR });
   ftpsServer = new StubFtpsServer({ certDir: CERT_DIR, accessCode: ACCESS, uploadDir });
   const mqttPort = await mqttServer.listen(0);
-  const ftpsPort = await ftpsServer.listen(0);
+  ftpsPort = await ftpsServer.listen(0);
 
   client = new OrchestratorMqttClient({ url: `mqtts://127.0.0.1:${mqttPort}`, serial: SERIAL, accessCode: ACCESS });
   await client.connect();
@@ -91,6 +93,33 @@ test("ejectAndReset stops the running print (FAILED)", async () => {
   await port.ejectAndReset();
   await waitForState("FAILED");
   expect(client.latest()!.hms.length).toBeGreaterThan(0);
+});
+
+// INV-MQTT-02: abort path = stop, then the dedicated eject job (homing + swap
+// only) is sent as a NORMAL print — the mechanism ends in a safe state.
+test("ejectAndReset with an eject artifact: stop, then upload + start the eject job (INV-MQTT-02)", async () => {
+  printer.reset();
+  const ejectPort = new MqttFtpsPrinter(
+    client,
+    { host: "127.0.0.1", port: ftpsPort, accessCode: ACCESS },
+    resolver,
+    { ejectArtifact: () => buildEjectThreemf("G1 Z180 F3000\nM400") },
+  );
+  await ejectPort.startPrint(job(9));
+  await waitForState("RUNNING");
+
+  await ejectPort.ejectAndReset();
+
+  // the eject 3mf actually reached the printer over FTPS...
+  expect(ftpsServer.uploadedFiles()).toContain("eject.gcode.3mf");
+  // ...and started as a normal print after the stop (stop precedes project_file
+  // on the same MQTT connection, so the stub had already left RUNNING).
+  await waitForState("RUNNING");
+  expect(client.latest()!.subtaskName).toBe("eject.gcode.3mf");
+
+  // eject job runs to completion like any print
+  printer.forceFinish();
+  await waitForState("FINISH");
 });
 
 test("rejects a non-4-element ams_mapping (INV-MQTT-01)", async () => {

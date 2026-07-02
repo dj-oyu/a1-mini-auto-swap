@@ -21,6 +21,7 @@ import { CompositeNotifier } from "./core/composite-notifier.ts";
 import { EscalationService } from "./core/escalation.ts";
 import { createOrchestrator } from "./orchestrator/orchestrator.ts";
 import { injectIntoThreemf } from "./injection/threemf.ts";
+import { buildEjectThreemf } from "./injection/eject-threemf.ts";
 import { systemClock, type Notifier } from "./core/ports.ts";
 import { parseAmsMapping } from "./core/ams-mapping.ts";
 import { cacheFileName, printArtifactName } from "./core/artifact.ts";
@@ -87,6 +88,10 @@ const printer = new MqttFtpsPrinter(
   mqtt,
   { host: PRINTER_HOST, port: PRINTER_FTPS_PORT, accessCode: PRINTER_ACCESS_CODE },
   resolver,
+  // spec 6/19 + INV-MQTT-02: after stop, send the dedicated eject job (homing +
+  // the same swap sequence the profile bakes in) to return the mechanism to a
+  // safe state. Bytes are deterministic for a given snippet.
+  { ejectArtifact: () => buildEjectThreemf(SWAP_SNIPPET) },
 );
 
 const gateway = new PrintfarmGateway(new MqttPublisherClient(MOSQUITTO_URL));

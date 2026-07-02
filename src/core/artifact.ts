@@ -12,3 +12,8 @@ export const printArtifactName = (jobId: number): string => `job-${jobId}.gcode.
 
 /** Prefix the monitor matches inside subtask_name (see printArtifactName). */
 export const jobSubtaskPrefix = (jobId: number): string => `job-${jobId}.`;
+
+/** On-printer name of the dedicated eject job (spec 6/19, INV-MQTT-02). Not a
+ *  DB job — the monitor must never attribute its FINISH to a queue row, which
+ *  the job- prefix scheme above already guarantees. */
+export const EJECT_ARTIFACT_NAME = "eject.gcode.3mf";
