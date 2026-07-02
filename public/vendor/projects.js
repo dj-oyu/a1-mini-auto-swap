@@ -20,7 +20,31 @@
     function poll() {
       window.PF.fetchPrinterStatus(function (s) { live = s; render(); });
     }
-    poll();
-    setInterval(poll, 30000);
+    poll(); // initial populate; live updates then arrive via SSE 'progress'
     document.body.addEventListener('htmx:afterSwap', render);
+
+    // Coalesced #projects refresh — mirrors app.js's #dashboard debounce so a
+    // burst of events (e.g. job_finished + the next job's job_started) collapses
+    // into one fragment fetch instead of several.
+    var refreshTimer = null;
+    function refresh() {
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(function () {
+        if (window.htmx) window.htmx.ajax('GET', '/ui/projects', { target: '#projects', swap: 'outerHTML' });
+      }, 150);
+    }
+
+    if (!window.EventSource) {
+      setInterval(poll, 30000); // no SSE → fall back to polling
+      return;
+    }
+    var es = new EventSource('/events');
+    window.PF.watchConnection(es, document.getElementById('connChip'));
+    // plate-completion events change project progress/ETA → refetch the card list
+    ['job_finished', 'job_failed', 'aborted'].forEach(function (t) { es.addEventListener(t, refresh); });
+    // push-based measured ETA: apply each progress frame directly, like app.js
+    es.addEventListener('progress', function (e) {
+      try { live = JSON.parse(e.data); } catch (_) {}
+      render();
+    });
   })();

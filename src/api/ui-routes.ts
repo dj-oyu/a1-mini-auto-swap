@@ -596,7 +596,11 @@ function renderProjectsPage(repo: Repo): Html {
   <link rel="stylesheet" href="/vendor/app.css" />
 </head>
 <body>
-  <header class="topbar"><h1>プロジェクト</h1>${nav("projects")}</header>
+  <header class="topbar">
+    <h1>プロジェクト</h1>
+    ${nav("projects")}
+    <span id="connChip" class="conn-chip" hidden>接続が切れました。表示が古い可能性があります</span>
+  </header>
   <main>${renderProjectsInner(repo)}</main>
   <script src="/vendor/shared.js" defer></script>
   <script src="/vendor/projects.js" defer></script>
@@ -621,6 +625,7 @@ function renderDashboard(data: DashboardData): Html {
   <header class="topbar">
     <h1>印刷キュー</h1>
     ${nav("queue")}
+    <span id="connChip" class="conn-chip" hidden>接続が切れました。表示が古い可能性があります</span>
     <div class="upload-wrap">
       <label class="upload" id="dropzone">
         <input type="file" accept=".gcode.3mf,.3mf" hidden id="fileInput" />

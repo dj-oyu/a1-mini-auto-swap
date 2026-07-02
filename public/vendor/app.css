@@ -31,6 +31,8 @@
   .printing-sub{color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
   .chip{font-size:13px;padding:4px 10px;border-radius:999px;background:#eef2f7;color:var(--ink)}
   .chip.ok{background:#e8f5ee;color:var(--green)} .chip.amber{background:#fdf0e2;color:var(--amber)} .chip.red{background:#fdeaea;color:var(--red)} .chip.warn{background:#fdf0e2;color:var(--amber)}
+  /* SSE connectivity indicator (header): calm, not alarming — red stays reserved for "stop". */
+  .conn-chip{font-size:13px;padding:4px 10px;border-radius:999px;background:#fdf0e2;color:var(--amber)}
   .banner{margin:14px 18px;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:var(--card)}
   .banner.calm{display:flex;gap:10px;align-items:center;color:var(--green);background:#f1f9f4;border-color:#cdebd8}
   .banner.amber{background:#fdf6ec;border-color:#f2dcbb}

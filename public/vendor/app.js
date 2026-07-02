@@ -267,6 +267,7 @@
       return;
     }
     var es = new EventSource('/events');
+    window.PF.watchConnection(es, document.getElementById('connChip'));
     ['job_started','job_finished','job_failed','aborted','stocker_low','waiting_for_refill','pending_action','filament_switched','timeout']
       .forEach(function (t) { es.addEventListener(t, refresh); });
     // build-plate low: pop a toast the moment the last plate is on the bed
