@@ -223,7 +223,8 @@ describe("GET / (dashboard SSR)", () => {
       const id = repo.createJob({ filename: "p.3mf" });
       const r = await body();
       expect(r.text).toContain(`src="/api/queue/${id}/thumbnail"`);
-      expect(r.text).toContain('onerror="this.remove()"'); // graceful when no thumb
+      // graceful when no thumb — delegated to app.js (no inline handler, CSP-friendly)
+      expect(r.text).toContain('data-onerror="remove"');
     });
 
     test("the confirm modal embeds the 3D viewer with a thumbnail fallback", async () => {
@@ -551,6 +552,73 @@ describe("GET / (dashboard SSR)", () => {
       expect(text).toContain("対応待ち 0");
       expect(repo.getStocker()!.remaining).toBe(8);
       expect(repo.getUnresolvedPendingActions()).toHaveLength(0);
+    });
+  });
+
+  describe("modal accessibility (frontend polish)", () => {
+    test("every modal-box is an ARIA dialog", async () => {
+      // snapshot modal
+      const snap = await (await app.request("/ui/snapshot")).text();
+      expect(snap).toContain('role="dialog"');
+      expect(snap).toContain('aria-modal="true"');
+
+      // preview modal (found + not-found variants)
+      const id = repo.createJob({ filename: "p.3mf" });
+      const preview = await (await app.request(`/ui/queue/${id}/preview`)).text();
+      expect(preview).toContain('role="dialog"');
+      expect(preview).toContain('aria-modal="true"');
+      const previewMissing = await (await app.request("/ui/queue/999999/preview")).text();
+      expect(previewMissing).toContain('role="dialog"');
+
+      // confirm modal (found + not-processing variants)
+      const confirm = await (await app.request(`/ui/queue/${id}/confirm`)).text();
+      expect(confirm).toContain('role="dialog"');
+      expect(confirm).toContain('aria-modal="true"');
+      repo.updateStatus(id, "printing");
+      const confirmWrongStatus = await (await app.request(`/ui/queue/${id}/confirm`)).text();
+      expect(confirmWrongStatus).toContain('role="dialog"');
+    });
+
+    test("no inline onerror handlers remain (CSP-friendly delegation instead)", async () => {
+      // matches a bare `onerror="` but not `data-onerror="` (negative lookbehind on the hyphen)
+      const inlineOnerror = /(?<!-)onerror="/;
+      repo.createJob({ filename: "p.3mf" }); // so the card-thumb's data-onerror is present
+      const dashboard = (await body()).text;
+      expect(dashboard).not.toMatch(inlineOnerror);
+      const snap = await (await app.request("/ui/snapshot")).text();
+      expect(snap).not.toMatch(inlineOnerror);
+      const id = repo.createJob({ filename: "p.3mf" });
+      const preview = await (await app.request(`/ui/queue/${id}/preview`)).text();
+      expect(preview).not.toMatch(inlineOnerror);
+      const confirm = await (await app.request(`/ui/queue/${id}/confirm`)).text();
+      expect(confirm).not.toMatch(inlineOnerror);
+      // the delegated attributes are present instead
+      expect(dashboard).toContain('data-onerror="remove"');
+      expect(snap).toContain('data-onerror="snapshot"');
+    });
+
+    test("data-confirm-job is not emitted (unused attribute, removed)", async () => {
+      const id = repo.createJob({ filename: "p.3mf" });
+      const confirm = await (await app.request(`/ui/queue/${id}/confirm`)).text();
+      expect(confirm).not.toContain("data-confirm-job");
+    });
+
+    test("app.js wires Escape-to-close, a Tab focus trap, and delegated error handling", async () => {
+      const js = await asset("/vendor/app.js");
+      expect(js).toContain("Escape");
+      expect(js).toContain("focusableIn");
+      expect(js).toMatch(/addEventListener\('error'.*true\)/s); // capture-phase delegation
+      expect(js).toContain("data-onerror");
+      // focus moves into the modal on open and back out on close
+      expect(js).toContain("onModalOpened");
+      expect(js).toContain(".focus()");
+    });
+
+    test("app.js shares one reorder-persist function between ↑/↓ and drag-drop", async () => {
+      const js = await asset("/vendor/app.js");
+      const matches = js.match(/function persistOrder/g) || [];
+      expect(matches.length).toBe(1); // defined once
+      expect((js.match(/persistOrder\(/g) || []).length).toBeGreaterThanOrEqual(3); // def + 2 call sites
     });
   });
 });
