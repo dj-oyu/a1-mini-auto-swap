@@ -198,6 +198,60 @@ describe("extractPlateMesh (task #23 — per-plate geometry)", () => {
     expect(mesh.positions).toEqual([12, 20, 30, 10, 22, 30, 10, 20, 32]);
   });
 
+  test("resolves external parts by p:path even when object ids COLLIDE across files", () => {
+    // The whole reason this parser exists instead of a generic 3MF loader:
+    // the production extension namespaces object ids per part file via p:path.
+    // Both external files below declare <object id="1"> with DIFFERENT geometry.
+    // A parser that flattens objects into one id-keyed map (the generic-loader
+    // bug) would let one file's mesh overwrite the other's and both plates would
+    // render the same geometry. We assert each plate resolves to ITS OWN file.
+    const root = `<?xml version="1.0" encoding="UTF-8"?>
+<model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06">
+ <resources>
+  <object id="2" type="model"><components>
+   <component p:path="/3D/Objects/object_a.model" objectid="1" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>
+  </components></object>
+  <object id="4" type="model"><components>
+   <component p:path="/3D/Objects/object_b.model" objectid="1" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>
+  </components></object>
+ </resources>
+ <build>
+  <item objectid="2" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>
+  <item objectid="4" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>
+ </build>
+</model>`;
+    const settings = `<config>
+      <plate><metadata key="plater_id" value="1"/><model_instance><metadata key="object_id" value="2"/></model_instance></plate>
+      <plate><metadata key="plater_id" value="2"/><model_instance><metadata key="object_id" value="4"/></model_instance></plate>
+    </config>`;
+    const buf = Buffer.from(
+      zipSync({
+        "3D/3dmodel.model": strToU8(root),
+        // colliding id=1, but geometry A lives at z=1…
+        "3D/Objects/object_a.model": strToU8(
+          part(1, [
+            [1, 0, 0],
+            [0, 1, 0],
+            [0, 0, 1],
+          ]),
+        ),
+        // …and colliding id=1, geometry B lives at z=9 (clearly distinct)
+        "3D/Objects/object_b.model": strToU8(
+          part(1, [
+            [9, 0, 0],
+            [0, 9, 0],
+            [0, 0, 9],
+          ]),
+        ),
+        "Metadata/model_settings.config": strToU8(settings),
+      }),
+    );
+    const a = extractPlateMesh(buf, "plate_1")!;
+    const b = extractPlateMesh(buf, "plate_2")!;
+    expect(a.positions).toEqual([1, 0, 0, 0, 1, 0, 0, 0, 1]); // object_a, not object_b
+    expect(b.positions).toEqual([9, 0, 0, 0, 9, 0, 0, 0, 9]); // object_b, not object_a
+  });
+
   test("returns null for an archive with no root model", () => {
     const buf = Buffer.from(zipSync({ "Metadata/project_settings.config": strToU8("{}") }));
     expect(extractPlateMesh(buf, "plate_1")).toBeNull();
