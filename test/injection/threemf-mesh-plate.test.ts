@@ -252,6 +252,48 @@ describe("extractPlateMesh (task #23 — per-plate geometry)", () => {
     expect(b.positions).toEqual([9, 0, 0, 0, 9, 0, 0, 0, 9]); // object_b, not object_a
   });
 
+  test("resolves per-object extruder + filament palette (stage-2 colouring)", () => {
+    // model_settings gives each object a base extruder; the OBJECT's extruder
+    // (not a nested <part>'s) is the one used. project_settings supplies the
+    // 0-based palette; the viewer colours a group with filamentColours[ext-1].
+    const settings = `<config>
+      <object id="2"><metadata key="extruder" value="3"/><part id="1"><metadata key="extruder" value="9"/></part></object>
+      <object id="4"><metadata key="extruder" value="1"/></object>
+      <plate><metadata key="plater_id" value="1"/><model_instance><metadata key="object_id" value="2"/></model_instance></plate>
+      <plate><metadata key="plater_id" value="2"/><model_instance><metadata key="object_id" value="4"/></model_instance></plate>
+    </config>`;
+    const project = JSON.stringify({
+      filament_colour: ["#111111", "#222222", "#0056B8"],
+      filament_type: ["PLA", "PLA", "PLA"],
+    });
+    const buf = Buffer.from(
+      zipSync({
+        "3D/3dmodel.model": strToU8(ROOT),
+        "3D/Objects/object_1.model": strToU8(part(1, [[1, 0, 0], [0, 1, 0], [0, 0, 1]])),
+        "3D/Objects/object_2.model": strToU8(part(3, [[0, 0, 0], [5, 0, 0], [0, 5, 0]])),
+        "Metadata/model_settings.config": strToU8(settings),
+        "Metadata/project_settings.config": strToU8(project),
+      }),
+    );
+    const m1 = extractPlateMesh(buf, "plate_1")!;
+    expect(m1.groups[0]!.extruder).toBe(3); // object 2's extruder, NOT the part's 9
+    expect(m1.filamentColours).toEqual(["#111111", "#222222", "#0056B8"]);
+    // resolved colour = filamentColours[extruder-1] = index 2 = #0056B8
+    expect(m1.filamentColours[m1.groups[0]!.extruder! - 1]).toBe("#0056B8");
+
+    const m2 = extractPlateMesh(buf, "plate_2")!;
+    expect(m2.groups[0]!.extruder).toBe(1);
+    expect(m2.filamentColours[m2.groups[0]!.extruder! - 1]).toBe("#111111");
+  });
+
+  test("extruder stays null + palette empty when model_settings/project_settings absent", () => {
+    // (whole-scene fallback / geometry-only archives): the viewer falls back to
+    // its default colour — never crashes on a missing palette.
+    const mesh = extractPlateMesh(fixture(), "plate_1")!;
+    expect(mesh.groups[0]!.extruder).toBeNull(); // object 2 has no <object> extruder entry
+    expect(mesh.filamentColours).toEqual([]); // fixture() carries no project_settings
+  });
+
   test("returns null for an archive with no root model", () => {
     const buf = Buffer.from(zipSync({ "Metadata/project_settings.config": strToU8("{}") }));
     expect(extractPlateMesh(buf, "plate_1")).toBeNull();

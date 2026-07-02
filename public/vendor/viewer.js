@@ -167,9 +167,16 @@ function ensureContext(el) {
     { passive: false },
   );
 
-  // recolor hook: the confirm modal calls this when a slot color changes
+  // recolor hooks: the confirm modal calls these when the AMS slot mapping /
+  // colours change, so the preview re-paints live (spec 17 §9).
   el.__setColor = (hex) => {
-    if (hex && ctx.material) ctx.material.color.set(hex);
+    if (hex) forEachMaterial(ctx, (m) => m.color.set(sanitizeHex(hex)));
+    ctx.render();
+  };
+  // Re-colour per object by a fresh 0-based filament palette (extruder → colour).
+  el.__setPalette = (colours) => {
+    if (Array.isArray(colours) && colours.length) ctx.palette = colours;
+    recolorGroups(ctx);
     ctx.render();
   };
 
@@ -177,13 +184,58 @@ function ensureContext(el) {
   return ctx;
 }
 
+const DEFAULT_COLOR = "#4b9fea";
+
+/** Bambu palettes are "#RRGGBB" (occasionally "#RRGGBBAA"); THREE wants 6 hex. */
+function sanitizeHex(hex) {
+  if (typeof hex !== "string") return DEFAULT_COLOR;
+  const m = /^#?([0-9a-fA-F]{6})/.exec(hex.trim());
+  return m ? "#" + m[1] : DEFAULT_COLOR;
+}
+
+function colorForExtruder(extruder, palette, fallback) {
+  if (extruder != null && palette && palette[extruder - 1]) return sanitizeHex(palette[extruder - 1]);
+  return sanitizeHex(fallback);
+}
+
+function makeMaterial(hex) {
+  return new THREE.MeshStandardMaterial({
+    color: new THREE.Color(hex),
+    metalness: 0.1,
+    roughness: 0.75,
+    flatShading: false,
+  });
+}
+
+function forEachMaterial(ctx, fn) {
+  const m = ctx.mesh && ctx.mesh.material;
+  if (Array.isArray(m)) m.forEach(fn);
+  else if (m) fn(m);
+}
+
+/** Repaint each geometry group's material from ctx.palette by its object extruder. */
+function recolorGroups(ctx) {
+  const mats = ctx.mesh && ctx.mesh.material;
+  if (!Array.isArray(mats) || !ctx.groups) return;
+  ctx.groups.forEach((g, i) => {
+    if (mats[i]) mats[i].color.set(colorForExtruder(g.extruder, ctx.palette, ctx.fallback));
+  });
+}
+
+function disposeMaterial(m) {
+  if (Array.isArray(m)) m.forEach((x) => x.dispose());
+  else if (m) m.dispose();
+}
+
 /** Swap in new geometry, disposing the previous BufferGeometry+material, and
- *  recenter the camera on the new bounding sphere. Reuses the same context. */
+ *  recenter the camera on the new bounding sphere. Reuses the same context.
+ *  When the mesh carries per-object `groups` + a `filamentColours` palette we
+ *  build one material per object (extruder → colour); otherwise a single colour. */
 function setGeometry(ctx, el, data) {
   if (ctx.mesh) {
     ctx.group.remove(ctx.mesh);
     ctx.mesh.geometry.dispose();
-    ctx.mesh.material.dispose();
+    disposeMaterial(ctx.mesh.material);
     ctx.mesh = null;
   }
 
@@ -193,19 +245,29 @@ function setGeometry(ctx, el, data) {
   geo.computeVertexNormals();
   geo.computeBoundingSphere();
 
-  const material = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(el.getAttribute("data-color") || "#4b9fea"),
-    metalness: 0.1,
-    roughness: 0.75,
-    flatShading: false,
-  });
+  const fallback = el.getAttribute("data-color") || DEFAULT_COLOR;
+  const palette = data.filamentColours || [];
+  const groups = data.groups || [];
+  ctx.groups = groups;
+  ctx.palette = palette;
+  ctx.fallback = fallback;
+
+  let material;
+  const canGroupColour = groups.length > 0 && groups.every((g) => g.count > 0);
+  if (canGroupColour) {
+    // one material per object; THREE renders each addGroup range with materials[i]
+    material = groups.map((g) => makeMaterial(colorForExtruder(g.extruder, palette, fallback)));
+    groups.forEach((g, i) => geo.addGroup(g.start, g.count, i));
+  } else {
+    material = makeMaterial(sanitizeHex(fallback));
+  }
   const mesh = new THREE.Mesh(geo, material);
 
   const sphere = geo.boundingSphere;
   mesh.position.set(-sphere.center.x, -sphere.center.y, -sphere.center.z);
   ctx.group.add(mesh);
   ctx.mesh = mesh;
-  ctx.material = material;
+  ctx.material = Array.isArray(material) ? material[0] : material;
 
   ctx.radius = sphere.radius || 50;
   ctx.dist = ctx.radius * 2.6;

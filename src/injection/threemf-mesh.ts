@@ -108,13 +108,16 @@ export interface PlateMesh {
   bbox: { min: [number, number, number]; max: [number, number, number] };
   /**
    * Per-object index ranges into `indices` (start + count, both multiples of 3).
-   * STAGE-2 COLORING SEAM: each group is one placed object; a later stage maps
-   * `objectId` → model_settings extruder → filament colour, and can decode the
-   * per-triangle `paint_color` attribute (present on Bambu multi-material parts)
-   * into a per-triangle attribute slot. `extruder` is left null here — geometry
-   * only; do NOT implement colouring in this stage.
+   * Each group is one placed object. `extruder` (1-based) is resolved from
+   * model_settings when available (null when unknown, e.g. whole-scene fallback);
+   * the viewer colours the group with `filamentColours[extruder-1]`.
+   * STAGE-3 SEAM: the per-triangle `paint_color` attribute (Bambu multi-material
+   * parts) can still further subdivide a group's colour; not decoded here.
    */
   groups: { objectId: number; extruder: number | null; start: number; count: number }[];
+  /** 0-based filament palette (`#RRGGBB`) from project_settings.config, so the
+   *  client can colour each group by extruder and re-colour on slot changes. */
+  filamentColours: string[];
 }
 
 /** Read a string attribute from a start tag (colon-safe, e.g. "p:path"). */
@@ -205,6 +208,33 @@ function parsePlateAssignments(xml: string): Map<number, number[]> {
     map.set(Number(pid[1]), ids);
   }
   return map;
+}
+
+/** model_settings.config `<object id> → extruder` (1-based). The id space is the
+ *  build object id (verified on real Bambu files: build objectid == the
+ *  model_settings <object id> used by plate assignment), so groups map directly. */
+function parseObjectExtruders(xml: string): Map<number, number> {
+  const map = new Map<number, number>();
+  const ore = /<object\b[^>]*?\bid="(\d+)"[^>]*>([\s\S]*?)<\/object>/g;
+  let o: RegExpExecArray | null;
+  while ((o = ore.exec(xml)) !== null) {
+    // the object's own extruder is the FIRST extruder metadata before any <part>
+    const head = o[2]!.split("<part")[0]!;
+    const ext = /key="extruder"\s+value="(\d+)"/.exec(head);
+    if (ext) map.set(Number(o[1]), Number(ext[1]));
+  }
+  return map;
+}
+
+/** 0-based filament palette from project_settings.config (`filament_colour`). */
+function parseFilamentColours(cfg: Uint8Array | undefined): string[] {
+  if (!cfg) return [];
+  try {
+    const json = JSON.parse(strFromU8(cfg)) as { filament_colour?: string[] };
+    return Array.isArray(json.filament_colour) ? json.filament_colour : [];
+  } catch {
+    return [];
+  }
 }
 
 /** Trailing integer of a plate id ("plate_24" → 24, "24" → 24). */
@@ -398,10 +428,18 @@ export function extractPlateMesh(threemf: Buffer, plateId: string): PlateMesh | 
 
   const scene = assembleScene(root, parts, targetIds);
   if (!scene) return null;
+
+  // Colouring (stage 2): resolve each object's base extruder from model_settings
+  // and expose the filament palette so the viewer can paint per-object.
+  const extruders = settings ? parseObjectExtruders(strFromU8(settings)) : new Map<number, number>();
+  for (const g of scene.groups) g.extruder = extruders.get(g.objectId) ?? null;
+  const filamentColours = parseFilamentColours(head["Metadata/project_settings.config"]);
+
   return {
     positions: scene.positions,
     indices: scene.indices,
     bbox: computeBbox(scene.positions),
     groups: scene.groups,
+    filamentColours,
   };
 }
