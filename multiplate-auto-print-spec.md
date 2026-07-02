@@ -140,7 +140,14 @@ Metadata/
   plate_1.png 他サムネイル各種
 ```
 
-- `paint_color`：三角形ごとにどのフィラメントスロットが塗られているかを示すビットマスク文字列。高indexから低indexの順にコードを剥がしてデコードする
+- `paint_color`：三角形ごとにどのフィラメントスロットが塗られているかを示すBambuStudio `TriangleSelector` の再帰分割ビットストリーム（16進文字列）。**stage 3 実装済み**（`src/injection/paint-color.ts`）。デコード規則（BambuStudio `master` から移植）：
+  - 16進文字列は**逆順**に読み、各16進桁＝1ニブル（4bit、LSB先頭）＝1ノードのコード。
+  - ノードのコード `code`：`split = code & 0b11`（0でリーフ）、`special = code >> 2`。
+  - リーフの `state`：`code>>2`（状態0..2）、または `code==0xC` をマーカーに `0xF` 拡張ブロック＋終端ニブルで `state = final + 15*num + 3`（状態≥3）。
+  - split ノードの子は `split+1` 個。高index→低index順にシリアライズ／デコードされ、子頂点は辺の中点（`perform_split` の 1/2/3 分割レイアウトを厳密再現、巻き方向＝法線を保存）。
+  - `state` はフィラメント番号（1-based、色は `filamentColours[state-1]`）。`state 0` はそのオブジェクトの基本エクストルーダ（未塗装）。
+  - コスト制御：深さ上限 `PAINT_DEPTH_CAP`（既定4）超は分割を打ち切り先頭リーフ色で1三角形に潰す。塗装のないモデルは追加コスト0（stage 2 と同一出力）。
+  - `/api/plate-mesh` のみ per-triangle 色（`triExtruder[]`）を返す。全体アーカイブ `/model` は単色のまま。
 - 抽出時の注意：再スライス後は`filament_id`がリセット/空になりAMSマッピングが外部スプール扱いにフォールバックする既知の不具合がある。**アップロードのたびに必ず最新configから再抽出し、古いメタデータをキャッシュしない**
 
 ---
