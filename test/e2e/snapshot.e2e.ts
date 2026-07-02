@@ -1,25 +1,27 @@
 import { test, expect } from "./fixtures";
 
-test.describe("camera snapshot", () => {
-  test("正常系: opening the camera modal shows the snapshot; 更新 reloads it", async ({ page }) => {
+test.describe("camera modal", () => {
+  test("正常系: opening the camera modal shows the live MJPEG stream", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "カメラ" }).click();
 
     const modal = page.locator("#modal .modal-box");
     await expect(modal).toBeVisible();
     await expect(modal).toContainText("カメラ");
+    await expect(modal).toContainText("ライブ"); // live label, no manual refresh
 
-    // the harness serves a placeholder frame → the img loads (200), stays shown
+    // the img streams the relay endpoint (multipart/x-mixed-replace). We don't
+    // fetch the stream here — it is intentionally endless — the <img> renders it.
     const img = modal.locator(".snapshot");
     await expect(img).toBeVisible();
-    const res = await page.request.get("/api/printer/snapshot");
-    expect(res.status()).toBe(200);
-    expect(res.headers()["content-type"]).toContain("image/png");
+    await expect(img).toHaveAttribute("src", "/api/printer/camera.mjpeg");
 
-    // 更新 swaps in a cache-busted src
-    await modal.getByRole("button", { name: "更新" }).click();
-    await expect(img).toHaveAttribute("src", /\/api\/printer\/snapshot\?t=\d+/);
+    // the one-off snapshot endpoint still works (webhook attachment / verify)
+    const snap = await page.request.get("/api/printer/snapshot");
+    expect(snap.status()).toBe(200);
+    expect(snap.headers()["content-type"]).toContain("image/jpeg");
 
+    // closing blanks the img src so the MJPEG connection is dropped
     await modal.getByRole("button", { name: "閉じる" }).click();
     await expect(page.locator("#modal .modal-box")).toHaveCount(0);
   });

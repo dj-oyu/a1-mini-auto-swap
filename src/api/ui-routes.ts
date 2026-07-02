@@ -278,23 +278,26 @@ function cardActions(job: JobRow): Html {
  *  children. Kept as one constant so all six modal-box call sites stay in sync. */
 const MODAL_BOX_A11Y = raw(' role="dialog" aria-modal="true" tabindex="-1"');
 
-/** Camera snapshot modal (spec 17 §5). The img 404s gracefully to a message
- *  when no frame is available (via app.js's delegated error handler,
- *  data-onerror="snapshot"); 更新 reloads it with a cache-buster. */
+/** Camera modal (spec 17 §5). The <img> points at the MJPEG relay stream
+ *  (multipart/x-mixed-replace, ~1fps live) instead of a one-shot snapshot — the
+ *  server holds a single upstream camera connection and fans frames out, so
+ *  every open tab stays within one printer-side slot. If the camera is down the
+ *  img errors and app.js swaps in the「なし」message (data-onerror="snapshot").
+ *  Closing the modal blanks the img src (app.js closeModal) to drop the stream —
+ *  removing the element alone does not reliably cut an MJPEG connection. */
 function renderSnapshotPanel(): Html {
   return html`
     <div class="modal-overlay" data-close>
       <div class="modal-box"${MODAL_BOX_A11Y}>
-        <h2 class="modal-title">カメラ</h2>
+        <h2 class="modal-title">カメラ <span class="muted cam-live">ライブ（約1fps）</span></h2>
         <img
           class="snapshot"
-          src="/api/printer/snapshot"
-          alt="printer camera"
+          src="/api/printer/camera.mjpeg"
+          alt="printer camera live"
           data-onerror="snapshot"
         />
-        <p class="muted snapshot-none" hidden>スナップショットがありません</p>
+        <p class="muted snapshot-none" hidden>カメラ映像がありません</p>
         <div class="modal-actions">
-          <button class="act" data-snap-refresh>更新</button>
           <button class="act" data-close>閉じる</button>
         </div>
       </div>

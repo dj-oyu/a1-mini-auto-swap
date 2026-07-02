@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -9,7 +9,9 @@ import { createUploadApp } from "../api/upload-routes.ts";
 import { createThumbnailApp } from "../api/thumbnail-routes.ts";
 import { createModelApp } from "../api/model-routes.ts";
 import { createPrinterApp, printerStatusView, type PrinterStatusSource } from "../api/printer-routes.ts";
-import { createSnapshotApp, type SnapshotSource } from "../api/snapshot-routes.ts";
+import { createSnapshotApp } from "../api/snapshot-routes.ts";
+import { createCameraApp } from "../api/camera-routes.ts";
+import { relaySnapshotSource, type FrameRelay } from "../orchestrator/camera-relay.ts";
 import { createUiApp } from "../api/ui-routes.ts";
 import { createVerifyApp } from "../api/verify-routes.ts";
 import { createEventsApp } from "../api/events-routes.ts";
@@ -74,19 +76,43 @@ app.route("/", createModelApp({ repo, cacheDir }));
 let fake = { gcodeState: "RUNNING", mcPercent: 42, mcRemainingTime: 73 };
 const fakeStatus: PrinterStatusSource = { latest: () => fake };
 app.route("/", createPrinterApp({ repo, status: fakeStatus }));
-// Placeholder camera frame (valid 1×1 PNG) so the camera modal is exercisable.
-const fakeSnapshot: SnapshotSource = {
-  latest: () => ({
-    contentType: "image/png",
-    bytes: new Uint8Array(
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
-        "base64",
-      ),
-    ),
-  }),
-};
-app.route("/", createSnapshotApp({ source: fakeSnapshot }));
+// Fake camera relay: a real (committed) JPEG re-sent every second, so both the
+// live MJPEG stream (/api/printer/camera.mjpeg) and one-off snapshots work with
+// no printer. Mirrors CameraRelay's contract (latest cached, fan-out on subscribe)
+// but with a fixed frame — no upstream socket, dev-only churn is irrelevant.
+const PLACEHOLDER_JPEG = readFileSync(join(import.meta.dir, "placeholder-camera.jpg"));
+class DevCameraRelay implements FrameRelay {
+  private readonly listeners = new Set<(jpeg: Buffer) => void>();
+  private timer: ReturnType<typeof setInterval> | null = null;
+  latest(): Buffer {
+    return PLACEHOLDER_JPEG;
+  }
+  async snapshot(): Promise<Buffer> {
+    return PLACEHOLDER_JPEG;
+  }
+  subscribe(onFrame: (jpeg: Buffer) => void): () => void {
+    this.listeners.add(onFrame);
+    queueMicrotask(() => {
+      if (this.listeners.has(onFrame)) onFrame(PLACEHOLDER_JPEG); // immediate first frame
+    });
+    if (!this.timer) {
+      this.timer = setInterval(() => {
+        for (const l of [...this.listeners]) l(PLACEHOLDER_JPEG);
+      }, 1000);
+      this.timer.unref?.();
+    }
+    return () => {
+      this.listeners.delete(onFrame);
+      if (this.listeners.size === 0 && this.timer) {
+        clearInterval(this.timer);
+        this.timer = null;
+      }
+    };
+  }
+}
+const cameraRelay = new DevCameraRelay();
+app.route("/", createSnapshotApp({ source: relaySnapshotSource(cameraRelay) }));
+app.route("/", createCameraApp({ relay: cameraRelay }));
 app.route("/", createUiApp(repo));
 // 実機検証ガイド (/verify): fake deps that succeed immediately, so the whole page
 // works with no printer/broker. runDiagnostics reports an all-green probe with a
