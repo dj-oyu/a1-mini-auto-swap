@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { Hono } from "hono";
-import { createUiApp } from "../../src/api/ui-routes.ts";
+import { createUiApp, projectRemainingSec } from "../../src/api/ui-routes.ts";
 import { openDb, type Db } from "../../src/db/index.ts";
 import type { Repo } from "../../src/db/repo.ts";
 
@@ -74,6 +74,34 @@ describe("projects page", () => {
     const id = repo.createProject("P", "strict");
     await form(`/ui/projects/${id}/policy`, "policy=bogus");
     expect(repo.getProject(id)?.color_consistency_policy).toBe("strict"); // unchanged
+  });
+
+  describe("per-project ETA aggregation", () => {
+    test("projectRemainingSec sums estimates + a swap per plate boundary", () => {
+      expect(projectRemainingSec([])).toBe(0);
+      expect(projectRemainingSec([{ estimated_seconds: 600 }])).toBe(600); // no boundary
+      // 600 + 900 + 1 boundary * 60
+      expect(projectRemainingSec([{ estimated_seconds: 600 }, { estimated_seconds: 900 }])).toBe(1560);
+      // nulls count as 0 duration but still add a boundary
+      expect(projectRemainingSec([{ estimated_seconds: null }, { estimated_seconds: null }])).toBe(60);
+    });
+
+    test("a project card carries the ETA data + running-plate hints", async () => {
+      const p = repo.createProject("Fleet");
+      const run = repo.createJob({ filename: "a.3mf", project_id: p, estimated_seconds: 4500 });
+      repo.updateStatus(run, "printing");
+      const q = repo.createJob({ filename: "b.3mf", project_id: p, estimated_seconds: 3900 });
+      repo.updateStatus(q, "queued");
+
+      const html = await (await app.request("/projects")).text();
+      expect(html).toContain('data-eta-sec="8460"'); // 4500+3900+60
+      expect(html).toContain(`data-run-id="${run}"`);
+      expect(html).toContain('data-run-est="4500"');
+      expect(html).toContain("完了予定");
+      expect(html).toContain("完了予定 "); // client fills the clock in
+      // and the page ships the ETA client script
+      expect(html).toContain("/api/printer/status");
+    });
   });
 
   test("both pages expose the nav", async () => {
