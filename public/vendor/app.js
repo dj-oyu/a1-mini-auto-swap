@@ -86,7 +86,15 @@
     }
     function closeModal() {
       var m = document.getElementById('modal');
-      if (m) m.innerHTML = '';
+      if (m) {
+        // The camera modal streams MJPEG (multipart/x-mixed-replace); some
+        // browsers keep the connection alive if we only remove the <img>, which
+        // would pin the server's single upstream camera slot open. Blank the src
+        // first so the browser cancels the stream and the relay can unsubscribe.
+        var cam = m.querySelector('.snapshot');
+        if (cam) cam.src = '';
+        m.innerHTML = '';
+      }
       if (modalOpenerEl && typeof modalOpenerEl.focus === 'function') modalOpenerEl.focus();
       modalOpenerEl = null;
     }
@@ -135,14 +143,7 @@
     document.body.addEventListener('click', function (e) {
       if (e.target.hasAttribute && e.target.hasAttribute('data-close')) { closeModal(); return; }
 
-      // camera modal: reload the snapshot with a cache-buster
-      var snapBtn = e.target.closest && e.target.closest('[data-snap-refresh]');
-      if (snapBtn) {
-        var img = document.querySelector('#modal .snapshot');
-        var none = document.querySelector('#modal .snapshot-none');
-        if (img) { img.hidden = false; if (none) none.hidden = true; img.src = '/api/printer/snapshot?t=' + Date.now(); }
-        return;
-      }
+      // camera modal is a live MJPEG stream now — no manual 更新 needed.
 
       // card action: reorder (↑/↓) — swap with the adjacent card, persist order
       var up = e.target.closest && e.target.closest('[data-move-up]');

@@ -472,18 +472,24 @@ describe("GET / (dashboard SSR)", () => {
       expect(r.text).toContain('hx-target="#modal"');
     });
 
-    test("GET /ui/snapshot renders the modal with the snapshot img + refresh", async () => {
+    test("GET /ui/snapshot renders the camera modal wired to the live MJPEG relay", async () => {
       const res = await app.request("/ui/snapshot");
       expect(res.status).toBe(200);
       const text = await res.text();
       expect(text).toContain('class="snapshot"');
-      expect(text).toContain('src="/api/printer/snapshot"');
-      expect(text).toContain("data-snap-refresh");
-      expect(text).toContain("スナップショットがありません"); // graceful empty
+      // live relay stream, not a one-shot snapshot; no manual 更新 button
+      expect(text).toContain('src="/api/printer/camera.mjpeg"');
+      expect(text).toContain("ライブ");
+      expect(text).not.toContain("data-snap-refresh");
+      expect(text).toContain("カメラ映像がありません"); // graceful empty
     });
 
-    test("the client wires the snapshot refresh", async () => {
-      expect(await asset("/vendor/app.js")).toContain("data-snap-refresh");
+    test("closeModal blanks the .snapshot src to drop the MJPEG connection", async () => {
+      const js = await asset("/vendor/app.js");
+      // removing the <img> alone can leave the stream open in some browsers, so
+      // the client must explicitly clear the src on close.
+      expect(js).toContain(".snapshot");
+      expect(js).toMatch(/cam\.src\s*=\s*''/);
     });
   });
 

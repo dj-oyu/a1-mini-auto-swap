@@ -1,17 +1,10 @@
-// A1/P1 chamber-camera client (orchestrator/camera.ts). Wire format 実測
+// A1/P1 chamber-camera PURE codec (orchestrator/camera.ts). Wire format 実測
 // 2026-07-02 against a real A1 mini: 80-byte auth packet, then 16-byte frame
-// headers (u32 LE size) + JPEG payloads. Integration runs against a fake TLS
-// camera server (same certs as the stub).
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { createServer as tlsCreateServer, type Server, type TLSSocket } from "node:tls";
-import { join } from "node:path";
-import {
-  BambuCameraSource,
-  buildCameraAuthPacket,
-  CameraFrameParser,
-} from "../../src/orchestrator/camera.ts";
-import { ensureCerts } from "../../src/stub/tls.ts";
-import type { Clock } from "../../src/core/ports.ts";
+// headers (u32 LE size) + JPEG payloads. The connection lifecycle (single shared
+// upstream, fan-out, linger, reconnect) lives in camera-relay.ts and is covered
+// by camera-relay.test.ts against a fake TLS camera server.
+import { describe, expect, test } from "bun:test";
+import { buildCameraAuthPacket, CameraFrameParser } from "../../src/orchestrator/camera.ts";
 
 const JPEG = Buffer.concat([
   Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
@@ -67,86 +60,5 @@ describe("CameraFrameParser", () => {
     const parser = new CameraFrameParser();
     const control = Buffer.alloc(32, 0x00);
     expect(parser.push(Buffer.concat([frameOf(control), frameOf(JPEG)]))?.equals(JPEG)).toBe(true);
-  });
-});
-
-describe("BambuCameraSource (integration vs fake camera server)", () => {
-  const CERT_DIR = join(process.cwd(), "certs");
-  let server: Server;
-  let port: number;
-  let connections = 0;
-  let mode: "frame" | "silent" = "frame";
-
-  class FakeClock implements Clock {
-    t = 1_000_000;
-    now(): number {
-      return this.t;
-    }
-  }
-
-  beforeAll(async () => {
-    const { key, cert } = ensureCerts(CERT_DIR);
-    server = tlsCreateServer({ key, cert }, (sock: TLSSocket) => {
-      connections++;
-      let got = 0;
-      sock.on("data", (c: Buffer) => {
-        got += c.length;
-        // After the 80-byte auth packet, stream one frame (unless silent).
-        if (got >= 80 && mode === "frame") sock.write(frameOf(JPEG));
-      });
-      sock.on("error", () => {});
-    });
-    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-    port = (server.address() as { port: number }).port;
-  });
-  afterAll(() => server.close());
-
-  const source = (clock: Clock, timeoutMs = 4000) =>
-    new BambuCameraSource({ host: "127.0.0.1", port, accessCode: "code", timeoutMs, clock });
-
-  test("captures a frame on demand (auth → header+payload → JPEG)", async () => {
-    mode = "frame";
-    const s = source(new FakeClock());
-    const frame = await s.latest();
-    expect(frame).not.toBeNull();
-    expect(frame!.contentType).toBe("image/jpeg");
-    expect(Buffer.from(frame!.bytes).equals(JPEG)).toBe(true);
-  });
-
-  test("TTL cache: a second latest() within the TTL reuses the frame (no reconnect)", async () => {
-    mode = "frame";
-    const clock = new FakeClock();
-    const s = source(clock);
-    const before = connections;
-    await s.latest();
-    expect(connections).toBe(before + 1);
-    await s.latest(); // clock unchanged → cached
-    expect(connections).toBe(before + 1);
-    clock.t += 60_000; // TTL expired
-    await s.latest();
-    expect(connections).toBe(before + 2);
-  });
-
-  test("concurrent callers coalesce onto one capture", async () => {
-    mode = "frame";
-    const s = source(new FakeClock());
-    const before = connections;
-    const [a, b] = await Promise.all([s.latest(), s.latest()]);
-    expect(connections).toBe(before + 1);
-    expect(a).not.toBeNull();
-    expect(b).not.toBeNull();
-  });
-
-  test("a silent camera degrades to null after the timeout — never throws (spec 20.8)", async () => {
-    mode = "silent";
-    const s = source(new FakeClock(), 700);
-    const frame = await s.latest();
-    expect(frame).toBeNull();
-    mode = "frame";
-  });
-
-  test("an unreachable camera degrades to null", async () => {
-    const s = new BambuCameraSource({ host: "127.0.0.1", port: 1, accessCode: "x", timeoutMs: 1000 });
-    expect(await s.latest()).toBeNull();
   });
 });
