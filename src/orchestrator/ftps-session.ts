@@ -52,7 +52,17 @@ async function openAndRun<T>(
       user: opts.username ?? "bblp",
       password: opts.accessCode,
       secure: "implicit",
-      secureOptions: { rejectUnauthorized: false },
+      // TLS 1.2 PINNED, both bounds: Bambu's FTPS stack is TLS1.2-only and is
+      // known to break mid-handshake against 1.3-capable clients (protocol
+      // notes: "TLS1.2のみ — 1.3でBambuStudioが途中で壊れた"). A default
+      // Node/Bun ClientHello offers 1.3 (extra extensions/keyshares); pinning
+      // 1.2 reproduces Bambu Studio's known-good wire behavior. Cert checks
+      // stay off per spec 2 (self-signed printer cert).
+      secureOptions: {
+        rejectUnauthorized: false,
+        minVersion: "TLSv1.2",
+        maxVersion: "TLSv1.2",
+      },
     });
     return await fn(client);
   } finally {
