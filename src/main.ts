@@ -271,7 +271,7 @@ if (AUTH_TOKEN) {
   app.route("/", createLoginApp(AUTH_TOKEN));
 }
 app.route("/", createApiApp(repo));
-app.route("/", createWriteApp({ repo, dispatcher: orch.dispatcher }));
+app.route("/", createWriteApp({ repo, dispatcher: orch.dispatcher, cacheDir: CACHE_DIR }));
 app.route("/", createUploadApp({ repo, cacheDir: CACHE_DIR })); // POST /api/queue → cache 3mf
 app.route("/", createThumbnailApp({ repo, cacheDir: CACHE_DIR })); // GET …/thumbnail (spec 17 §6)
 app.route("/", createModelApp({ repo, cacheDir: CACHE_DIR })); // GET …/model (spec 17 §9)

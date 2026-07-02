@@ -75,6 +75,36 @@ export class Repo implements QueueStore {
   getJob(id: number): JobRow | null {
     return this.db.query("SELECT * FROM jobs WHERE id=?").get(id) as JobRow | null;
   }
+  // Multi-plate fan-out (plate-multiselect): create an independent job that
+  // copies the print plan of `sourceId` (filename, project, filaments,
+  // ams_mapping, estimated_seconds) but prints a DIFFERENT plate. The stored
+  // JSON blobs are copied verbatim (no re-encode). Status defaults to
+  // 'processing' — the caller copies the cached artifact then enqueues it, so a
+  // clone is never queued while pointing at a missing file. Returns the new id.
+  cloneJob(sourceId: number, overrides: { selected_plate?: string | null } = {}): number {
+    const src = this.getJob(sourceId);
+    if (!src) throw new Error(`cannot clone missing job ${sourceId}`);
+    const pos = (
+      this.db.query("SELECT COALESCE(MAX(position),0)+1 AS p FROM jobs").get() as { p: number }
+    ).p;
+    const plate =
+      overrides.selected_plate !== undefined ? overrides.selected_plate : src.selected_plate;
+    const r = this.db
+      .query(
+        `INSERT INTO jobs (filename, project_id, estimated_seconds, filaments, ams_mapping, selected_plate, position)
+         VALUES (?,?,?,?,?,?,?) RETURNING id`,
+      )
+      .get(
+        src.filename,
+        src.project_id,
+        src.estimated_seconds,
+        src.filaments,
+        src.ams_mapping,
+        plate,
+        pos,
+      ) as { id: number };
+    return r.id;
+  }
   listJobs(): JobRow[] {
     return this.db.query("SELECT * FROM jobs ORDER BY position ASC, id ASC").all() as JobRow[];
   }

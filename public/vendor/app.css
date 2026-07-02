@@ -78,6 +78,18 @@
   .plate-opt{display:flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;cursor:pointer;font-size:13px}
   .plate-opt:has(input:checked){border-color:var(--blue);background:#eef4fd}
   .plate-eta{color:var(--muted);font-size:12px}
+  /* ordered print-sequence builder (multi-plate 3mf confirm) */
+  .plate-palette{display:flex;flex-wrap:nowrap;gap:8px;overflow-x:auto;padding:2px 0 8px;scrollbar-width:thin;-webkit-overflow-scrolling:touch}
+  .plate-chip{flex:0 0 auto;display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:inherit;cursor:pointer;font:inherit;font-size:13px;white-space:nowrap}
+  .plate-chip:hover{border-color:var(--blue);background:#eef4fd}
+  .plate-add-all{flex:0 0 auto;white-space:nowrap}
+  .plate-seq-list{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:4px}
+  .plate-seq-item{display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid var(--line);border-radius:8px;font-size:13px}
+  .plate-seq-item .seq-idx{min-width:20px;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+  .plate-seq-item .seq-label{flex:1}
+  .plate-seq-item .seq-controls{display:flex;gap:4px;margin-left:auto}
+  .plate-seq-count{margin:6px 0 0;font-size:12px}
+  .plate-seq-error{margin:6px 0 0;color:var(--red,#d1453b);font-size:13px}
   .proj-assign{display:flex;gap:10px;align-items:center;margin:0 0 14px;font-size:14px}
   .proj-assign select{margin-left:auto;font:inherit;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:#fff}
   .modal-actions{display:flex;gap:8px;justify-content:flex-end}
