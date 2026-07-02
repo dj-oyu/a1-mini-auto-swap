@@ -133,6 +133,30 @@ export class OrchestratorMqttClient extends EventEmitter {
     }
   }
 
+  /** Resolve with the first status matching `pred`, or null on timeout. Used to
+   *  confirm the printer actually acted on a command (e.g. left IDLE after a
+   *  project_file) instead of trusting the ack alone (実測 2026-07-03: the A1
+   *  acks project_file "success" then sets a print_error and stays IDLE). */
+  waitForStatus(pred: (s: PrinterStatus) => boolean, timeoutMs: number): Promise<PrinterStatus | null> {
+    return new Promise((resolve) => {
+      const onStatus = (s: PrinterStatus) => {
+        if (pred(s)) {
+          cleanup();
+          resolve(s);
+        }
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        resolve(null);
+      }, timeoutMs);
+      const cleanup = () => {
+        this.off("status", onStatus);
+        clearTimeout(timer);
+      };
+      this.on("status", onStatus);
+    });
+  }
+
   publishProjectFile(params: ProjectFileParams): void {
     // Field set proven against real firmware (実測 2026-07-02 probe V1:
     // ack success → PREPARE → RUNNING with exactly this shape).

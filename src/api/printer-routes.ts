@@ -31,18 +31,30 @@ export interface PrinterStatusView {
   gcode_state: string;
 }
 
-/** Pure mapper: the currently-printing job + latest live status → the view sent
- *  over both HTTP (GET /api/printer/status) and SSE (event: progress). */
+/** gcode_states in which the printer is genuinely doing a print. IDLE / FINISH /
+ *  FAILED / (unknown) are NOT active — a DB job stuck in 'printing' against any
+ *  of those is a desync, not a live print. */
+const ACTIVE_PRINT_STATES = new Set(["RUNNING", "PREPARE", "PAUSE", "SLICING"]);
+
+/** Pure mapper: the currently-printing DB job + latest live status → the view
+ *  sent over both HTTP (GET /api/printer/status) and SSE (event: progress).
+ *
+ *  `printing` follows the REAL printer (gcode_state), not just the DB: a job in
+ *  DB 'printing' while the printer reports IDLE (a failed start / transient
+ *  dispatch desync — 実測 2026-07-03) must NOT show as printing. The DB job
+ *  supplies the id; the printer supplies whether it's actually running. */
 export function printerStatusView(printing: JobRow | null, s: LiveStatus | null): PrinterStatusView {
-  if (!printing || !s) {
-    return { printing: false, job_id: null, percent: 0, remaining_min: 0, gcode_state: s?.gcodeState ?? "IDLE" };
+  const gcodeState = s?.gcodeState ?? "IDLE";
+  const active = !!printing && !!s && ACTIVE_PRINT_STATES.has(gcodeState);
+  if (!active) {
+    return { printing: false, job_id: printing?.id ?? null, percent: 0, remaining_min: 0, gcode_state: gcodeState };
   }
   return {
     printing: true,
-    job_id: printing.id,
-    percent: Number.isFinite(s.mcPercent) ? s.mcPercent : 0,
-    remaining_min: Number.isFinite(s.mcRemainingTime) ? s.mcRemainingTime : 0,
-    gcode_state: s.gcodeState,
+    job_id: printing!.id,
+    percent: Number.isFinite(s!.mcPercent) ? s!.mcPercent : 0,
+    remaining_min: Number.isFinite(s!.mcRemainingTime) ? s!.mcRemainingTime : 0,
+    gcode_state: gcodeState,
   };
 }
 

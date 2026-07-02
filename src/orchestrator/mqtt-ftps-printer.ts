@@ -28,6 +28,11 @@ export interface MqttFtpsPrinterOptions {
    *  upload-progress-throttle.ts) so a caller can forward it straight to SSE
    *  without flooding. */
   onUploadProgress?: (context: string, p: UploadProgressSample) => void;
+  /** After publishing project_file, wait up to this long for the printer to
+   *  actually leave IDLE (→ PREPARE/RUNNING). The ack alone is not proof of a
+   *  start (実測 2026-07-03: A1 acks "success" then sets a print_error and
+   *  stays IDLE). 0 disables the check. Default 20s. */
+  confirmStartMs?: number;
 }
 
 /**
@@ -48,11 +53,7 @@ export class MqttFtpsPrinter implements PrinterPort {
     if (artifact.amsMapping.length !== 4) {
       throw new Error(`ams_mapping must have exactly 4 elements (INV-MQTT-01)`);
     }
-    await uploadBytes(
-      { ...this.ftps, onProgress: this.uploadProgressHook(`job-${job.id}`) },
-      artifact.bytes,
-      printerUploadPath(artifact.remoteName),
-    );
+    await this.upload(artifact.bytes, artifact.remoteName, `job-${job.id}`);
     this.mqtt.publishProjectFile({
       param: artifact.param,
       url: artifact.url,
@@ -65,6 +66,21 @@ export class MqttFtpsPrinter implements PrinterPort {
       // per plate would burn minutes each swap cycle; leave them off.
       bedLeveling: true,
     });
+
+    // Confirm the printer actually STARTED (left IDLE) — the ack is not enough.
+    // If it stays IDLE (rejected the print, e.g. a filament/AMS mismatch sets a
+    // print_error), throw so the dispatcher reverts the job to 'queued' instead
+    // of stranding it in a phantom 'printing' (実測 2026-07-03).
+    const confirmMs = this.opts.confirmStartMs ?? 20_000;
+    if (confirmMs > 0) {
+      const started = await this.mqtt.waitForStatus((s) => s.gcodeState !== "IDLE", confirmMs);
+      if (!started) {
+        throw new Error(
+          `printer accepted the command but did not start within ${Math.round(confirmMs / 1000)}s ` +
+            `(still IDLE — likely a print_error; check the printer screen / filament mapping)`,
+        );
+      }
+    }
   }
 
   /** spec 6/9 abnormal path + INV-MQTT-02: `stop`, then send the dedicated
@@ -80,11 +96,7 @@ export class MqttFtpsPrinter implements PrinterPort {
     this.mqtt.stop();
     const eject = this.opts.ejectArtifact?.();
     if (!eject) return; // no eject artifact configured — stop-only
-    await uploadBytes(
-      { ...this.ftps, onProgress: this.uploadProgressHook("eject") },
-      eject,
-      printerUploadPath(EJECT_ARTIFACT_NAME),
-    );
+    await this.upload(eject, EJECT_ARTIFACT_NAME, "eject");
     this.mqtt.publishProjectFile({
       param: "Metadata/plate_1.gcode",
       url: `ftp:///cache/${EJECT_ARTIFACT_NAME}`,
@@ -104,6 +116,16 @@ export class MqttFtpsPrinter implements PrinterPort {
     console.warn(
       `[printer] resumeWithAlternateSlot(job=${jobId}, slot=${slot}) is NOT implemented ` +
         `(spec 19 unverified MQTT command) — the print will stay paused on the printer`,
+    );
+  }
+
+  /** FTPS-upload the artifact to the printer cache. Protected so tests can
+   *  override it for a hermetic start-confirmation unit test. */
+  protected async upload(bytes: Buffer, remoteName: string, context: string): Promise<void> {
+    await uploadBytes(
+      { ...this.ftps, onProgress: this.uploadProgressHook(context) },
+      bytes,
+      printerUploadPath(remoteName),
     );
   }
 

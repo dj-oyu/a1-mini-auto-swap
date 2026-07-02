@@ -215,6 +215,20 @@ const orch = createOrchestrator({
   lowStockThreshold: num("STOCKER_LOW_THRESHOLD", 1),
 });
 
+// Reconcile stale state on boot: if the DB thinks a job is 'printing' but the
+// real printer isn't (crash mid-print, or a failed start that stranded the job
+// — 実測 2026-07-03), revert it to 'queued' so the UI stops lying. Wait for the
+// first real report before judging (mqtt.latest() is null until then).
+const printingAtBoot = repo.listByStatus("printing");
+if (printingAtBoot.length > 0) {
+  const s = await mqtt.waitForStatus(() => true, 8_000);
+  const reallyPrinting = s?.gcodeState === "RUNNING" || s?.gcodeState === "PREPARE";
+  if (!reallyPrinting) {
+    for (const j of printingAtBoot) repo.updateStatus(j.id, "queued");
+    console.log(`  reconcile: ${printingAtBoot.length} stale 'printing' → queued (printer ${s?.gcodeState ?? "unknown"})`);
+  }
+}
+
 // Resume any job left 'queued' by a previous run (crash/restart recovery):
 // dispatchNext no-ops on an idle-with-empty-queue boot, and reverts to queued
 // if the start fails, so this is safe to fire unconditionally.
