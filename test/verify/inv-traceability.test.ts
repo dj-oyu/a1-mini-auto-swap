@@ -97,14 +97,6 @@ const UNCOVERED: { id: string; reason: string }[] = [
       "なく、実際には『src/orchestrator 以外の層が mqtt/basic-ftp をimportしない』という" +
       "コード構造で担保されているのみ。機械的な接続可否テストはまだ書けていない（未実装）。",
   },
-  {
-    id: "INV-RUNOUT-02",
-    reason:
-      "spec 15 の『色が代替されたジョブは完了通知に必ずその旨が含まれる』は未実装。" +
-      "dispatcher.onFinished (src/core/dispatcher.ts) が送る job_finished 通知イベントは " +
-      "jobId のみで、代替色に触れる message を持たない（src/core/ports.ts の NotifyEvent 参照）。" +
-      "invariants.yaml でも layer: ai （自然言語判定）指定であり、通知本文の実装自体が先行課題。",
-  },
 ];
 
 const UNCOVERED_IDS = new Set(UNCOVERED.map((u) => u.id));

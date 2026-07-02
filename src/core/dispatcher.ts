@@ -104,7 +104,18 @@ export class Dispatcher {
     const job = this.repo.getJob(jobId);
     this.repo.updateStatus(jobId, "success");
     this.swapPlate();
-    this.notifier?.notify({ type: "job_finished", jobId }); // spec 15 (INV-NOTIFY-01)
+    // spec 15 (INV-NOTIFY-01); a substituted color must surface here — never
+    // discovered after the fact (spec 14, INV-RUNOUT-02).
+    this.notifier?.notify({
+      type: "job_finished",
+      jobId,
+      ...(job?.substituted_color != null
+        ? {
+            severity: "advisory" as const,
+            message: `完了（フィラメントが自動切替されました: ${job.substituted_color}。確認推奨）`,
+          }
+        : {}),
+    });
     if (job) this.applyColorConsistency(job);
     await this.dispatchNext();
   }
