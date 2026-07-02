@@ -143,6 +143,19 @@ app.post("/__dev/progress", (c) => {
   return c.json({ ok: true });
 });
 
+// Dev-only test hook: push an upload-progress SSE frame directly (deterministic
+// E2E for the FTPS upload indicator — no real transfer, no timers). Mirrors
+// __dev/progress: query params in, one sendUploadProgress() out.
+app.post("/__dev/upload-progress", (c) => {
+  const q = c.req.query();
+  sse.sendUploadProgress({
+    context: q.context ?? "dry-rehearsal",
+    bytesSent: Number(q.bytes_sent ?? 0),
+    totalBytes: Number(q.total_bytes ?? 100),
+  });
+  return c.json({ ok: true });
+});
+
 // idleTimeout 0: keep long-lived SSE (/events) connections open (dev harness).
 const server = Bun.serve({ port: HTTP_PORT, idleTimeout: 0, fetch: app.fetch });
 console.log(`UI dev harness up (in-memory, seeded, NO real printer)`);
