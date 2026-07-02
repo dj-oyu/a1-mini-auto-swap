@@ -28,8 +28,15 @@ function intAttr(tag: string, name: string): number | null {
 }
 
 /**
- * Extract a merged mesh from a `.gcode.3mf` / `.3mf`, or null when the archive
- * carries no parseable geometry. Never throws into the caller.
+ * Extract a merged whole-archive mesh from a `.gcode.3mf` / `.3mf`, or null when
+ * the archive carries no parseable geometry. Never throws into the caller.
+ *
+ * When the archive is a Bambu "production extension" file (it has a `<build>`),
+ * every build item is placed with its composed component∘build-item transform so
+ * a multi-object file (e.g. 4/26 letters) spreads across its real plater
+ * positions instead of stacking every object at the origin. Falls back to the
+ * transform-less union of all `<mesh>` bodies only for simple archives that have
+ * NO `<build>` (e.g. a single inline-mesh 3mf), so those still render.
  */
 export function extractMesh(threemf: Buffer): Mesh | null {
   let files: Record<string, Uint8Array>;
@@ -38,6 +45,26 @@ export function extractMesh(threemf: Buffer): Mesh | null {
   } catch {
     return null;
   }
+
+  // Preferred: transform-aware scene assembly (production extension).
+  const rootBytes = files["3D/3dmodel.model"];
+  if (rootBytes) {
+    try {
+      const root = parseRootModel(strFromU8(rootBytes));
+      const scene = assembleScene(root, files, null); // null ⇒ ALL build items
+      if (scene) return { positions: scene.positions, indices: scene.indices };
+    } catch {
+      /* fall through to the untransformed union */
+    }
+  }
+
+  // Fallback: no <build> → union every mesh in local coordinates.
+  return mergeAllMeshesUntransformed(files);
+}
+
+/** Union every `<mesh>` in every `*.model` part in LOCAL coordinates (no
+ *  build/component transforms). Only used for archives without a `<build>`. */
+function mergeAllMeshesUntransformed(files: Record<string, Uint8Array>): Mesh | null {
   const modelNames = Object.keys(files).filter((n) => /\.model$/i.test(n));
   const positions: number[] = [];
   const indices: number[] = [];
@@ -52,37 +79,7 @@ export function extractMesh(threemf: Buffer): Mesh | null {
     const meshRe = /<mesh\b[^>]*>([\s\S]*?)<\/mesh>/g;
     let mesh: RegExpExecArray | null;
     while ((mesh = meshRe.exec(xml)) !== null) {
-      const body = mesh[1]!;
-      const base = positions.length / 3;
-
-      const verts = /<vertices\b[^>]*>([\s\S]*?)<\/vertices>/.exec(body);
-      if (!verts) continue;
-      let added = 0;
-      const vre = /<vertex\b[^>]*?\/?>/g;
-      let v: RegExpExecArray | null;
-      while ((v = vre.exec(verts[1]!)) !== null) {
-        const x = numAttr(v[0], "x");
-        const y = numAttr(v[0], "y");
-        const z = numAttr(v[0], "z");
-        if (x == null || y == null || z == null) continue;
-        positions.push(x, y, z);
-        added++;
-      }
-
-      const tris = /<triangles\b[^>]*>([\s\S]*?)<\/triangles>/.exec(body);
-      if (tris) {
-        const tre = /<triangle\b[^>]*?\/?>/g;
-        let t: RegExpExecArray | null;
-        while ((t = tre.exec(tris[1]!)) !== null) {
-          const a = intAttr(t[0], "v1");
-          const b = intAttr(t[0], "v2");
-          const c = intAttr(t[0], "v3");
-          // guard against indices outside the vertices we just read
-          if (a == null || b == null || c == null) continue;
-          if (a >= added || b >= added || c >= added) continue;
-          indices.push(base + a, base + b, base + c);
-        }
-      }
+      pushMesh(mesh[1]!, positions, indices, []);
     }
   }
 
@@ -275,6 +272,73 @@ function pushMesh(
   return tris;
 }
 
+interface Scene {
+  positions: number[];
+  indices: number[];
+  groups: PlateMesh["groups"];
+}
+
+/**
+ * Assemble a transformed triangle scene from a parsed root model. Each target
+ * build object is placed via its composed component∘build-item transform, so
+ * objects land at their real plater positions (no origin stacking). `parts`
+ * supplies the external `*.model` bytes (keyed by archive path). Returns null
+ * when the archive has no `<build>` (⇒ caller falls back) or yields no geometry.
+ *
+ * `targetObjectIds`: the build object ids to include; `null` ⇒ every build item.
+ */
+function assembleScene(
+  root: ReturnType<typeof parseRootModel>,
+  parts: Record<string, Uint8Array>,
+  targetObjectIds: number[] | null,
+): Scene | null {
+  if (root.build.size === 0) return null; // no production-extension build
+  const targetIds = targetObjectIds ?? [...root.build.keys()];
+  if (targetIds.length === 0) return null;
+
+  const positions: number[] = [];
+  const indices: number[] = [];
+  const groups: PlateMesh["groups"] = [];
+  for (const oid of targetIds) {
+    const res = root.resources.get(oid);
+    if (!res) continue;
+    const itemT = root.build.get(oid) ?? null;
+    const start = indices.length;
+    if (res.inlineMesh) pushMesh(res.inlineMesh, positions, indices, [itemT]);
+    for (const comp of res.components) {
+      const bytes = parts[comp.path];
+      if (!bytes) continue;
+      let body: string | null;
+      try {
+        body = findMeshBody(strFromU8(bytes), comp.objectid);
+      } catch {
+        continue;
+      }
+      if (body) pushMesh(body, positions, indices, [comp.transform, itemT]);
+    }
+    if (indices.length > start) {
+      groups.push({ objectId: oid, extruder: null, start, count: indices.length - start });
+    }
+  }
+
+  if (positions.length === 0 || indices.length === 0) return null;
+  return { positions, indices, groups };
+}
+
+/** Axis-aligned bounds over a flat [x,y,z,…] position buffer. */
+function computeBbox(positions: number[]): PlateMesh["bbox"] {
+  const min: [number, number, number] = [Infinity, Infinity, Infinity];
+  const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < positions.length; i += 3) {
+    for (let k = 0; k < 3; k++) {
+      const val = positions[i + k]!;
+      if (val < min[k]!) min[k] = val;
+      if (val > max[k]!) max[k] = val;
+    }
+  }
+  return { min, max };
+}
+
 /**
  * Extract the merged, transform-applied geometry for a single plate from a
  * Bambu `.3mf` / `.gcode.3mf`, or null when nothing renderable is found. Reads
@@ -322,50 +386,22 @@ export function extractPlateMesh(threemf: Buffer, plateId: string): PlateMesh | 
   for (const oid of targetIds) {
     for (const comp of root.resources.get(oid)?.components ?? []) needed.add(comp.path);
   }
-  let parts: Record<string, Uint8Array> = {};
+  // The root model is already decompressed (head); add only the needed parts.
+  const parts: Record<string, Uint8Array> = { "3D/3dmodel.model": rootBytes };
   if (needed.size) {
     try {
-      parts = unzipSync(threemf, { filter: (f) => needed.has(f.name) });
+      Object.assign(parts, unzipSync(threemf, { filter: (f) => needed.has(f.name) }));
     } catch {
       return null;
     }
   }
 
-  const positions: number[] = [];
-  const indices: number[] = [];
-  const groups: PlateMesh["groups"] = [];
-  for (const oid of targetIds) {
-    const res = root.resources.get(oid);
-    if (!res) continue;
-    const itemT = root.build.get(oid) ?? null;
-    const start = indices.length;
-    if (res.inlineMesh) pushMesh(res.inlineMesh, positions, indices, [itemT]);
-    for (const comp of res.components) {
-      const bytes = parts[comp.path];
-      if (!bytes) continue;
-      let body: string | null;
-      try {
-        body = findMeshBody(strFromU8(bytes), comp.objectid);
-      } catch {
-        continue;
-      }
-      if (body) pushMesh(body, positions, indices, [comp.transform, itemT]);
-    }
-    if (indices.length > start) {
-      groups.push({ objectId: oid, extruder: null, start, count: indices.length - start });
-    }
-  }
-
-  if (positions.length === 0 || indices.length === 0) return null;
-
-  const min: [number, number, number] = [Infinity, Infinity, Infinity];
-  const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
-  for (let i = 0; i < positions.length; i += 3) {
-    for (let k = 0; k < 3; k++) {
-      const val = positions[i + k]!;
-      if (val < min[k]!) min[k] = val;
-      if (val > max[k]!) max[k] = val;
-    }
-  }
-  return { positions, indices, bbox: { min, max }, groups };
+  const scene = assembleScene(root, parts, targetIds);
+  if (!scene) return null;
+  return {
+    positions: scene.positions,
+    indices: scene.indices,
+    bbox: computeBbox(scene.positions),
+    groups: scene.groups,
+  };
 }
