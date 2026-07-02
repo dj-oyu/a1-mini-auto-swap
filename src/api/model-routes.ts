@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { extractMesh } from "../injection/threemf-mesh.ts";
+import { cacheFileName } from "../core/artifact.ts";
 import type { Repo } from "../db/repo.ts";
 
 /**
@@ -20,7 +21,7 @@ export function createModelApp(deps: { repo: Repo; cacheDir: string }): Hono {
     if (!Number.isInteger(id) || id <= 0) return c.json({ error: "invalid job id" }, 404);
     if (!repo.getJob(id)) return c.json({ error: "job not found" }, 404);
 
-    const path = join(cacheDir, `${id}.gcode.3mf`);
+    const path = join(cacheDir, cacheFileName(id));
     if (!existsSync(path)) return c.json({ error: "no cached artifact for job" }, 404);
 
     let mesh;

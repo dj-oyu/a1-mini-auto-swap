@@ -48,8 +48,14 @@ export class MqttFtpsPrinter implements PrinterPort {
     // (spec 19 open item). For now stop() drives the printer toward IDLE.
   }
 
-  async resumeWithAlternateSlot(_jobId: number, _slot: number): Promise<void> {
+  async resumeWithAlternateSlot(jobId: number, slot: number): Promise<void> {
     // TODO(spec 14/16): exact MQTT resume-on-alternate-slot command is unverified
-    // against real hardware. Best-effort no-op until confirmed.
+    // against real hardware. Until confirmed this is a no-op — warn loudly so a
+    // runout "auto-switch" that didn't actually happen is visible in the logs,
+    // not silently reported as success.
+    console.warn(
+      `[printer] resumeWithAlternateSlot(job=${jobId}, slot=${slot}) is NOT implemented ` +
+        `(spec 19 unverified MQTT command) — the print will stay paused on the printer`,
+    );
   }
 }

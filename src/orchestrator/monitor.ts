@@ -1,6 +1,7 @@
 import type { OrchestratorMqttClient, PrinterStatus } from "./mqtt-client.ts";
 import type { Dispatcher } from "../core/dispatcher.ts";
 import type { QueueStore } from "../core/ports.ts";
+import { jobSubtaskPrefix } from "../core/artifact.ts";
 
 /**
  * Monitoring loop (spec ⑦): bridges observed printer status → dispatcher
@@ -62,7 +63,7 @@ export class Monitor {
 
   private currentJob(subtask: string): { id: number } | null {
     const printing = this.store.listByStatus("printing");
-    return printing.find((j) => subtask.includes(`job-${j.id}.`)) ?? printing[0] ?? null;
+    return printing.find((j) => subtask.includes(jobSubtaskPrefix(j.id))) ?? printing[0] ?? null;
   }
 }
 

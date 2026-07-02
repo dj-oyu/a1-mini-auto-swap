@@ -1,7 +1,5 @@
-import { createHash } from "node:crypto";
-
-// G-code injection primitives (spec 7). Pure string/hash functions — the 3MF
-// archive plumbing (unzip, sidecar update, repackage) is a separate adapter.
+// G-code injection primitives (spec 7). Pure string functions — the 3MF
+// archive plumbing (unzip, MD5 sidecar, repackage) is the injection/ adapter.
 
 /** Marker at the end of the slicer's MACHINE_START_GCODE block (spec 7). */
 export const MACHINE_START_MARKER = "; MACHINE_START_GCODE_END";
@@ -50,10 +48,4 @@ export function resolvePlaceholders(snippet: string, vars: Record<string, string
     return match;
   });
   return { text, warnings };
-}
-
-/** MD5 hex of the gcode bytes, for the `.gcode.md5` sidecar (spec 7, INV-INJECT-01). */
-export function gcodeMd5(gcode: string | Buffer): string {
-  const buf = typeof gcode === "string" ? Buffer.from(gcode, "utf8") : gcode;
-  return createHash("md5").update(buf).digest("hex");
 }

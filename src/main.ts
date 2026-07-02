@@ -23,13 +23,21 @@ import { createOrchestrator } from "./orchestrator/orchestrator.ts";
 import { injectIntoThreemf } from "./injection/threemf.ts";
 import { systemClock, type Notifier } from "./core/ports.ts";
 import { parseAmsMapping } from "./core/ams-mapping.ts";
+import { cacheFileName, printArtifactName } from "./core/artifact.ts";
 
 // Orchestrator entrypoint (spec 3): wires every adapter from env config into the
 // running core loop, and serves the HTTP API. Thin — the assembly logic lives
 // in createOrchestrator (integration-tested); this only builds the real adapters.
 
 const env = (k: string, d?: string) => process.env[k] ?? d;
-const num = (k: string, d: number) => Number(process.env[k] ?? d);
+// Fail fast on malformed numeric env instead of booting with NaN ports/intervals.
+const num = (k: string, d: number) => {
+  const raw = process.env[k];
+  if (raw === undefined || raw === "") return d;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) throw new Error(`env ${k} must be a number, got "${raw}"`);
+  return n;
+};
 
 const DB_PATH = env("DB_PATH", "./data/orchestrator.sqlite")!;
 const CACHE_DIR = env("CACHE_DIR", "./data/cache")!;
@@ -63,13 +71,15 @@ const mqtt = new OrchestratorMqttClient({
  *  the swap sequence + recompute the MD5 sidecar, return the upload bytes.
  *  (The POST /api/queue upload that populates the cache is a later slice.) */
 const resolver: ArtifactResolver = (job) => {
-  const original = readFileSync(join(CACHE_DIR, `${job.id}.gcode.3mf`));
+  const original = readFileSync(join(CACHE_DIR, cacheFileName(job.id)));
   const { bytes } = injectIntoThreemf(original, { endSnippet: SWAP_SNIPPET });
+  // remoteName/url use the job- prefixed printer-side name: the printer echoes
+  // it as subtask_name, which the monitor correlates on (core/artifact.ts).
   return {
     bytes,
-    remoteName: `${job.id}.gcode.3mf`,
+    remoteName: printArtifactName(job.id),
     param: "Metadata/plate_1.gcode",
-    url: `ftp:///cache/${job.id}.gcode.3mf`,
+    url: `ftp:///cache/${printArtifactName(job.id)}`,
     amsMapping: parseAmsMapping(job.ams_mapping), // validated, throws on corrupt data (INV-MQTT-01)
   };
 };
