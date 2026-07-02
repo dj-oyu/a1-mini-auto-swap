@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { extractThumbnail } from "../injection/threemf.ts";
 import { cacheFileName } from "../core/artifact.ts";
+import { artifactETag } from "./http-cache.ts";
 import type { Repo } from "../db/repo.ts";
 
 /**
@@ -24,6 +25,15 @@ export function createThumbnailApp(deps: { repo: Repo; cacheDir: string }): Hono
     const path = join(cacheDir, cacheFileName(id));
     if (!existsSync(path)) return c.json({ error: "no cached artifact for job" }, 404);
 
+    // Revalidate, don't long-cache: same id-keyed mutable artifact as the mesh
+    // routes — a reused job id must not serve a prior upload's thumbnail.
+    const etag = artifactETag(path, "thumb");
+    c.header("cache-control", "no-cache");
+    if (etag) {
+      c.header("etag", etag);
+      if (c.req.header("if-none-match") === etag) return c.body(null, 304);
+    }
+
     let png: Uint8Array | null;
     try {
       png = extractThumbnail(readFileSync(path));
@@ -33,7 +43,6 @@ export function createThumbnailApp(deps: { repo: Repo; cacheDir: string }): Hono
     if (!png) return c.json({ error: "no thumbnail in artifact" }, 404);
 
     c.header("content-type", "image/png");
-    c.header("cache-control", "public, max-age=3600");
     return c.body(png as Uint8Array<ArrayBuffer>);
   });
 

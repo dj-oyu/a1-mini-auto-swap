@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { extractMesh, extractPlateMesh } from "../injection/threemf-mesh.ts";
 import { cacheFileName } from "../core/artifact.ts";
+import { artifactETag } from "./http-cache.ts";
 import type { Repo } from "../db/repo.ts";
 
 /**
@@ -24,6 +25,15 @@ export function createModelApp(deps: { repo: Repo; cacheDir: string }): Hono {
     const path = join(cacheDir, cacheFileName(id));
     if (!existsSync(path)) return c.json({ error: "no cached artifact for job" }, 404);
 
+    // Revalidate, don't long-cache: the file behind this id-keyed URL is mutable
+    // (job-id reuse), so a stale cached body must never be served (see http-cache).
+    const etag = artifactETag(path, "model");
+    c.header("cache-control", "no-cache");
+    if (etag) {
+      c.header("etag", etag);
+      if (c.req.header("if-none-match") === etag) return c.body(null, 304);
+    }
+
     let mesh;
     try {
       mesh = extractMesh(readFileSync(path));
@@ -32,7 +42,6 @@ export function createModelApp(deps: { repo: Repo; cacheDir: string }): Hono {
     }
     if (!mesh) return c.json({ error: "no mesh in artifact" }, 404);
 
-    c.header("cache-control", "public, max-age=3600");
     return c.json(mesh);
   });
 
@@ -51,6 +60,16 @@ export function createModelApp(deps: { repo: Repo; cacheDir: string }): Hono {
     const path = join(cacheDir, cacheFileName(id));
     if (!existsSync(path)) return c.json({ error: "no cached artifact for job" }, 404);
 
+    // Revalidate against a validator keyed on the file bytes AND the plate (the
+    // plate selects a different slice of the same file). Prevents a reused job
+    // id from serving a prior upload's plate mesh for the identical URL.
+    const etag = artifactETag(path, `plate:${plate}`);
+    c.header("cache-control", "no-cache");
+    if (etag) {
+      c.header("etag", etag);
+      if (c.req.header("if-none-match") === etag) return c.body(null, 304);
+    }
+
     let mesh;
     try {
       mesh = extractPlateMesh(readFileSync(path), plate);
@@ -59,7 +78,6 @@ export function createModelApp(deps: { repo: Repo; cacheDir: string }): Hono {
     }
     if (!mesh) return c.json({ error: "no mesh for plate" }, 404);
 
-    c.header("cache-control", "public, max-age=3600");
     return c.json(mesh);
   });
 
