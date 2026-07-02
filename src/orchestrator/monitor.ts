@@ -2,6 +2,7 @@ import type { OrchestratorMqttClient, PrinterStatus } from "./mqtt-client.ts";
 import type { Dispatcher } from "../core/dispatcher.ts";
 import type { QueueStore } from "../core/ports.ts";
 import { jobSubtaskPrefix } from "../core/artifact.ts";
+import { moduleLogger } from "../obs/default-logger.ts";
 
 /**
  * Monitoring loop (spec ⑦): bridges observed printer status → dispatcher
@@ -22,6 +23,7 @@ export class Monitor {
   private lastKey = "";
   private chain: Promise<void> = Promise.resolve();
   private started = false;
+  private readonly log = moduleLogger("monitor");
   private readonly onStatus = (s: PrinterStatus) => this.enqueue(s);
 
   constructor(
@@ -43,7 +45,7 @@ export class Monitor {
 
   private enqueue(s: PrinterStatus): void {
     this.chain = this.chain.then(() => this.handle(s)).catch((e) => {
-      console.error("[monitor] handler error:", e);
+      this.log.error("handler error", { event: "monitor_error", err: e instanceof Error ? e.message : String(e) });
     });
   }
 

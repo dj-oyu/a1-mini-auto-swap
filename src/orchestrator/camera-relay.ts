@@ -3,6 +3,7 @@ import type { Clock } from "../core/ports.ts";
 import { systemClock } from "../core/ports.ts";
 import type { SnapshotSource } from "../api/snapshot-routes.ts";
 import { buildCameraAuthPacket, CameraFrameParser } from "./camera.ts";
+import { moduleLogger } from "../obs/default-logger.ts";
 
 // Camera RELAY (spec ch8 / spec 17 §5). The A1/P1 chamber camera (port-6000 TLS
 // protocol, wire format 実測 2026-07-02 — see camera.ts) exposes a scarce number
@@ -234,7 +235,7 @@ export class CameraRelay implements FrameRelay {
   }
 
   private warn(msg: string): void {
-    console.warn(`[camera-relay] ${msg}`);
+    moduleLogger("camera").warn(msg, { event: "camera_relay_warn" });
   }
 }
 

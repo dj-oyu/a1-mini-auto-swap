@@ -1,4 +1,7 @@
 import { Client } from "basic-ftp";
+import { moduleLogger } from "../obs/default-logger.ts";
+
+const log = moduleLogger("ftps");
 
 // Central FTPS session management for the printer connection.
 //
@@ -55,13 +58,13 @@ async function openAndRun<T>(
 ): Promise<T> {
   const client = new Client(opts.timeoutMs ?? 30_000);
   const t0 = Date.now();
-  const phase = (msg: string) => console.log(`[ftps] ${msg} (+${Date.now() - t0}ms)`);
+  const phase = (msg: string) => log.info(msg, { event: "ftps_phase", elapsedMs: Date.now() - t0 });
   // FTPS_TRACE=1: dump the full control dialogue (field triage — shows exactly
   // which command drew which reply / where the server dropped the connection).
   // basic-ftp's verbose log masks the PASS argument itself; keep it that way.
   if (process.env.FTPS_TRACE === "1") {
     client.ftp.verbose = true;
-    client.ftp.log = (msg: string) => console.log(`[ftps-trace +${Date.now() - t0}ms] ${msg.trimEnd()}`);
+    client.ftp.log = (msg: string) => log.debug(msg.trimEnd(), { event: "ftps_trace", elapsedMs: Date.now() - t0 });
   }
   try {
     await client.access({
@@ -152,14 +155,20 @@ export async function withFtpsRetry<T>(
       // further and cannot succeed until the printer reboots.
       consecutiveRefused = isRefusedError(e) ? consecutiveRefused + 1 : 0;
       if (consecutiveRefused >= 2) {
-        console.warn(`[ftps] server keeps refusing connections — printer reboot required (giving up)`);
+        log.warn("server keeps refusing connections — printer reboot required (giving up)", {
+          event: "ftps_wedged",
+          err: (e as Error).message,
+        });
         throw new FtpsWedgedError((e as Error).message);
       }
       if (i === attempts || !isTransientConnectError(e)) throw e;
-      console.warn(
-        `[ftps] attempt ${i}/${attempts} failed (${(e as Error).message}); ` +
-          `retrying in ${Math.round(delayMs / 1000)}s (printer may still hold the previous session)`,
-      );
+      log.warn("attempt failed; retrying (printer may still hold the previous session)", {
+        event: "ftps_retry",
+        attempt: i,
+        attempts,
+        err: (e as Error).message,
+        retryInMs: delayMs,
+      });
       await new Promise((r) => setTimeout(r, delayMs));
     }
   }

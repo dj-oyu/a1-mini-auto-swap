@@ -2,6 +2,7 @@ import mqtt, { type MqttClient as MqttConn } from "mqtt";
 import { EventEmitter } from "node:events";
 import { reportTopic, requestTopic } from "../protocol/topics.ts";
 import { pushStatusSchema } from "./report-schema.ts";
+import { moduleLogger } from "../obs/default-logger.ts";
 
 /** Normalized printer status the orchestrator consumes (from push_status). */
 export interface PrinterStatus {
@@ -56,6 +57,7 @@ export class OrchestratorMqttClient extends EventEmitter {
   private readonly serial: string;
   private latestStatus: PrinterStatus | null = null;
   private connectedOnce = false;
+  private readonly log = moduleLogger("mqtt");
 
   constructor(private readonly opts: MqttClientOptions) {
     super();
@@ -107,13 +109,19 @@ export class OrchestratorMqttClient extends EventEmitter {
       // Always log command acks — a rejected project_file used to fail in
       // total silence (実測 2026-07-02: the Stage 5 "uploaded but nothing
       // happens" hour). Low volume: one line per command sent.
-      console.log(
-        `[mqtt] ack ${String(p.command)} → ${p.result}` +
-          (p.reason !== undefined && p.reason !== p.result ? ` (reason=${String(p.reason)})` : ""),
-      );
+      this.log.info("command ack", {
+        event: "mqtt_ack",
+        command: p.command,
+        result: p.result,
+        ...(p.reason !== undefined && p.reason !== p.result ? { reason: p.reason } : {}),
+      });
       this.emit("ack", { command: p.command, result: p.result, sequenceId: p.sequence_id, reason: p.reason });
       return;
     }
+    // Raw report fan-out (obs streams 2 & 3): the state-log and the opt-in raw
+    // recorder both consume this single event, so neither opens a second MQTT
+    // connection. Carries the un-normalized print block (print_error, ams, …).
+    this.emit("report", p);
     if (p.gcode_state !== undefined) {
       // Boundary validation (report-schema.ts): lenient scalar coercion, but
       // hms entries are checked instead of blindly cast, and NaN degrades to 0.

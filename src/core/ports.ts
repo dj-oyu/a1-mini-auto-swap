@@ -63,6 +63,30 @@ export interface Clock {
 
 export const systemClock: Clock = { now: () => Date.now() };
 
+/** Structured log fields (a flat-ish bag; nested objects are fine and are
+ *  redacted recursively by the adapter). */
+export type LogFields = Record<string, unknown>;
+
+export type LogLevel = "debug" | "info" | "warn" | "error";
+
+/**
+ * Structured logging port (obs adapter: pino). Defined here so I/O adapters can
+ * depend on the interface, but **core services do NOT log** — the domain stays
+ * pure (no Logger field on dispatcher/eta/…). Only orchestrator/api/db/stub
+ * adapters and the composition roots take a Logger.
+ *
+ * `child(bindings)` returns a logger that stamps `bindings` (e.g. {mod:"ftps"})
+ * onto every record — the module-binding pattern. The concrete adapter lives in
+ * src/obs/; a MemorySink-backed one drives deterministic tests.
+ */
+export interface Logger {
+  debug(msg: string, fields?: LogFields): void;
+  info(msg: string, fields?: LogFields): void;
+  warn(msg: string, fields?: LogFields): void;
+  error(msg: string, fields?: LogFields): void;
+  child(bindings: LogFields): Logger;
+}
+
 /**
  * The persistence surface the dispatcher needs — a narrow subset of the full
  * Repo, so core depends on an interface rather than the concrete SQLite class.
