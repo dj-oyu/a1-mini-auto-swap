@@ -166,6 +166,70 @@ describe("POST /api/pending-actions/:id/resolve", () => {
   });
 });
 
+describe("POST /api/stocker (set capacity — first-boot init)", () => {
+  test("creates the stocker row with capacity and remaining=capacity by default", async () => {
+    const res = await app.request("/api/stocker", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ capacity: 8 }),
+    });
+    expect(res.status).toBe(200);
+    const s = (await res.json()) as StockerRow;
+    expect(s.capacity).toBe(8);
+    expect(s.remaining).toBe(8);
+  });
+
+  test("accepts an explicit remaining and resolves any stocker_refill pending", async () => {
+    const pid = repo.createPendingAction({ type: "stocker_refill", severity: "blocking_queue" });
+    const res = await app.request("/api/stocker", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ capacity: 10, remaining: 3 }),
+    });
+    expect(((await res.json()) as StockerRow).remaining).toBe(3);
+    expect(repo.getUnresolvedPendingActions().some((a) => a.id === pid)).toBe(false);
+  });
+
+  test("400s on invalid capacity (0, negative, missing)", async () => {
+    for (const bad of [{ capacity: 0 }, { capacity: -1 }, {}]) {
+      const res = await app.request("/api/stocker", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(bad),
+      });
+      expect(res.status).toBe(400);
+    }
+  });
+});
+
+describe("dispatch trigger on confirm (spec ⑥ — queued job starts on an idle printer)", () => {
+  test("confirming filaments with a ready stocker dispatches the job to printing", async () => {
+    repo.setStocker(10, 10);
+    const id = repo.createJob({ filename: "letter.gcode.3mf", filaments: [{ slot: 0, color: "#fff", type: "PLA" }] });
+    const res = await app.request(`/api/queue/${id}/filaments`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ams_mapping: [0, -1, -1, -1] }),
+    });
+    expect(res.status).toBe(200);
+    // The response reflects the just-queued state; the fire-and-forget dispatch
+    // then flips it to printing synchronously (FakePrinter.startPrint is a no-op).
+    expect((await res.json() as JobRow).status).toBe("queued");
+    expect(repo.getJob(id)?.status).toBe("printing");
+  });
+
+  test("confirming with no stocker leaves the job queued and raises stocker_refill (no dispatch)", async () => {
+    const id = repo.createJob({ filename: "letter.gcode.3mf", filaments: [{ slot: 0, color: "#fff", type: "PLA" }] });
+    await app.request(`/api/queue/${id}/filaments`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ams_mapping: [0, -1, -1, -1] }),
+    });
+    expect(repo.getJob(id)?.status).toBe("queued");
+    expect(repo.getUnresolvedPendingActions().some((a) => a.type === "stocker_refill")).toBe(true);
+  });
+});
+
 describe("POST /api/stocker/refill", () => {
   test("sets remaining=capacity and resolves outstanding stocker_refill pendings", async () => {
     repo.setStocker(10, 0);

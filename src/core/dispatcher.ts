@@ -93,8 +93,18 @@ export class Dispatcher {
   }
 
   private async dispatch(job: JobRow): Promise<DispatchOutcome> {
+    // Flip to 'printing' synchronously (before any await) so a concurrent
+    // dispatchNext sees the machine busy and can't double-dispatch.
     this.repo.updateStatus(job.id, "printing");
-    await this.printer.startPrint(this.repo.getJob(job.id)!);
+    try {
+      await this.printer.startPrint(this.repo.getJob(job.id)!);
+    } catch (e) {
+      // The start (FTPS upload / project_file) failed — nothing is actually
+      // printing, so revert to 'queued' rather than stranding the job in
+      // 'printing'. The caller can surface/log the error and retry the queue.
+      this.repo.updateStatus(job.id, "queued");
+      throw e;
+    }
     return { dispatched: job.id };
   }
 

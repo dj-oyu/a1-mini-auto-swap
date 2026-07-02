@@ -28,6 +28,11 @@ const filamentsPatchSchema = z.object({
   project_id: z.number().int().nullish(),
 });
 
+const stockerSetSchema = z.object({
+  capacity: z.number().int().min(1).max(100),
+  remaining: z.number().int().min(0).max(100).optional(),
+});
+
 const reorderSchema = z.object({
   order: z
     .array(z.number().int().positive())
@@ -62,9 +67,34 @@ function parseId(raw: string): number | null {
  * Mirrors createApiApp's style: a plain Hono app, testable via
  * `app.request(...)`, mounted alongside the read routes by main().
  */
+/** Fire-and-forget queue kick after a mutation that could make a job
+ *  dispatchable (confirm → queued, retry → queued, refill → unblocked). Never
+ *  rejects into the request: dispatchNext no-ops when busy/blocked, and a
+ *  failed start reverts the job to queued (dispatcher.dispatch). */
+function triggerDispatch(dispatcher: Dispatcher): void {
+  void dispatcher.dispatchNext().catch((e) => {
+    console.warn(`[dispatch] start failed, job returned to queue: ${(e as Error).message}`);
+  });
+}
+
 export function createWriteApp(deps: { repo: Repo; dispatcher: Dispatcher }): Hono {
   const { repo, dispatcher } = deps;
   const app = new Hono();
+
+  // POST /api/stocker — set the stocker capacity (and reset remaining to it).
+  // spec 11: capacity is a hardware-fixed value; this is how a fresh install
+  // initializes it (there was previously no way to create the row from the UI).
+  app.post("/api/stocker", async (c) => {
+    const body = await parseBody(c.req, stockerSetSchema);
+    if (!body.ok) return c.json({ error: body.error }, 400);
+    repo.setStocker(body.data.capacity, body.data.remaining ?? body.data.capacity);
+    // A newly-filled stocker may unblock a queue that stalled while empty.
+    for (const a of repo.getUnresolvedPendingActions()) {
+      if (a.type === "stocker_refill") repo.resolvePendingAction(a.id);
+    }
+    triggerDispatch(dispatcher);
+    return c.json(repo.getStocker());
+  });
 
   // POST /api/projects — spec ch8: create a project.
   app.post("/api/projects", async (c) => {
@@ -106,6 +136,7 @@ export function createWriteApp(deps: { repo: Repo; dispatcher: Dispatcher }): Ho
     for (const action of repo.getUnresolvedPendingActions()) {
       if (action.type === "stocker_refill") repo.resolvePendingAction(action.id);
     }
+    triggerDispatch(dispatcher); // a refilled stocker may unblock the queue
     return c.json(repo.getStocker());
   });
 
@@ -135,7 +166,13 @@ export function createWriteApp(deps: { repo: Repo; dispatcher: Dispatcher }): Ho
     for (const a of repo.getUnresolvedPendingActions()) {
       if (a.type === "filament_confirm" && a.job_id === id) repo.resolvePendingAction(a.id);
     }
-    return c.json(repo.getJob(id));
+    const queuedJob = repo.getJob(id);
+    // Kick the queue: on an idle printer this starts the print now (spec ⑥ —
+    // confirm → queued → dispatch). Fire-and-forget so the confirm returns
+    // immediately (the FTPS upload takes seconds); dispatchNext no-ops if busy,
+    // stocker-empty, or blocked, and a failed start reverts the job to queued.
+    triggerDispatch(dispatcher);
+    return c.json(queuedJob);
   });
 
   // POST /api/queue/:id/retry — spec ch8/18: human-triggered retry.
@@ -150,6 +187,7 @@ export function createWriteApp(deps: { repo: Repo; dispatcher: Dispatcher }): Ho
       for (const a of repo.getUnresolvedPendingActions()) {
         if (a.type === "retry_decision" && a.job_id === id) repo.resolvePendingAction(a.id);
       }
+      triggerDispatch(dispatcher); // re-queued → start it if the printer is idle
     }
     return c.json({ requeued });
   });
