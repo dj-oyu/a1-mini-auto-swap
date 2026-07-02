@@ -91,11 +91,26 @@ export class PrintfarmGateway implements Notifier {
 /** Real MqttPublisher over the self-hosted Mosquitto broker. */
 export class MqttPublisherClient implements MqttPublisher {
   private readonly conn: MqttClient;
+  // Rate-limit connection-error logging: without a Mosquitto broker present
+  // (e.g. Windows dev boxes without a local broker), mqtt.js retries every
+  // `reconnectPeriod` and would otherwise spam one warning per attempt forever.
+  private lastErrorLoggedAt = 0;
+  private static readonly ERROR_LOG_INTERVAL_MS = 60_000;
+
   constructor(url: string, opts: { username?: string; password?: string } = {}) {
     this.conn = mqtt.connect(url, {
       username: opts.username,
       password: opts.password,
       reconnectPeriod: 1000,
+    });
+    // mqtt.js emits 'error' on connection failures (e.g. ECONNREFUSED); without
+    // a listener, Node treats it as an unhandled error and crashes the process.
+    this.conn.on("error", (err) => {
+      const now = Date.now();
+      if (now - this.lastErrorLoggedAt >= MqttPublisherClient.ERROR_LOG_INTERVAL_MS) {
+        this.lastErrorLoggedAt = now;
+        console.warn(`[gateway] mqtt connection error (${url}): ${err.message}`);
+      }
     });
   }
   publish(topic: string, payload: string, opts?: { retain?: boolean }): void {
