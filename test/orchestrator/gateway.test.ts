@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   MqttPublisherClient,
   PrintfarmGateway,
@@ -8,6 +8,8 @@ import {
   type QueueJobView,
 } from "../../src/orchestrator/gateway.ts";
 import type { Clock } from "../../src/core/ports.ts";
+import { createLogger } from "../../src/obs/logger.ts";
+import { MemorySink } from "../../src/obs/sinks.ts";
 
 function waitFor(cond: () => boolean, ms = 3000): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -104,23 +106,27 @@ describe("PrintfarmGateway (spec 16, Tab5 contract)", () => {
 
 describe("MqttPublisherClient (no broker present, Windows-dev-box robustness)", () => {
   test("connecting to an unreachable broker does not crash the process (error is handled, logged, rate-limited)", async () => {
-    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    // Capture the gateway's own structured log (not console): inject a Logger
+    // backed by a MemorySink so we assert on the written records.
+    const mem = new MemorySink();
+    const logger = createLogger({ level: "warn", sinks: [mem], clock });
+    const warnings = () => mem.records().filter((r) => r.level === "warn");
     // Port with nothing listening: connection is refused immediately, which
     // used to emit an unhandled 'error' and crash the whole process.
-    const client = new MqttPublisherClient("mqtt://127.0.0.1:59991");
+    const client = new MqttPublisherClient("mqtt://127.0.0.1:59991", { logger });
     try {
       // Reaching this point at all (vs. the process dying) is the main
       // assertion; also confirm the failure was logged exactly once even
       // though mqtt.js will keep retrying (reconnectPeriod: 1000ms).
-      await waitFor(() => warnSpy.mock.calls.length >= 1);
-      expect(warnSpy.mock.calls[0]![0]).toContain("mqtt connection error");
+      await waitFor(() => warnings().length >= 1);
+      expect(warnings()[0]!.msg).toContain("mqtt connection error");
+      expect(warnings()[0]!.event).toBe("gateway_mqtt_error");
       // Let a second reconnect attempt (reconnectPeriod: 1000ms) land before
       // asserting it was suppressed — this is real elapsed time by necessity
       // (verifying a time-based rate limit), kept to the minimum needed.
       await new Promise((resolve) => setTimeout(resolve, 1200));
-      expect(warnSpy.mock.calls.length).toBe(1); // suppressed: same error within the log interval
+      expect(warnings().length).toBe(1); // suppressed: same error within the log interval
     } finally {
-      warnSpy.mockRestore();
       await client.close();
     }
   }, 5000);
