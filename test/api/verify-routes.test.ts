@@ -294,3 +294,81 @@ describe("progress persistence (zod round-trip + corruption recovery)", () => {
     expect(repo.getSetting("verify_progress")).toBe("garbage");
   });
 });
+
+// ── TEMPORARY (実機検証用 — 確認後に削除, task#16) ─────────────────────────────
+// 一時検証セクション: 撮影テスト / Discord写真報告 / 自動キャプチャのアーム。
+import { createVerifyApp as createVerifyAppTemp } from "../../src/api/verify-routes.ts";
+import { openDb as openDbTemp } from "../../src/db/index.ts";
+
+describe("TEMPORARY verify photo-test endpoints", () => {
+  const JPEG = Buffer.from([0xff, 0xd8, 0xaa, 0xff, 0xd9]);
+
+  function tempApp(overrides: Partial<Parameters<typeof createVerifyAppTemp>[0]> = {}) {
+    const { repo } = openDbTemp(":memory:");
+    const armed: boolean[] = [];
+    const sent: string[] = [];
+    const app = createVerifyAppTemp({
+      repo,
+      runDiagnostics: async () => { throw new Error("unused"); },
+      printerStatus: () => ({ printing: false, job_id: null, percent: 0, remaining_min: 0, gcode_state: "IDLE" }),
+      startDryRun: async () => {},
+      eject: async () => {},
+      testSnapshot: async () => JPEG,
+      sendPhotoReport: async (_j, note) => { sent.push(note); return true; },
+      armAutoCapture: (a) => { armed.push(a); },
+      autoCaptureState: () => ({ armed: armed[armed.length - 1] ?? false, fired: null }),
+      ...overrides,
+    });
+    return { app, armed, sent };
+  }
+
+  test("test-snapshot captures and the preview route serves the held JPEG", async () => {
+    const { app } = tempApp();
+    const res = await app.request("/api/verify/test-snapshot", { method: "POST" });
+    expect(res.status).toBe(200);
+    const img = await app.request("/api/verify/test-snapshot.jpg");
+    expect(img.status).toBe(200);
+    expect(img.headers.get("content-type")).toBe("image/jpeg");
+    expect(Buffer.from(await img.arrayBuffer()).equals(JPEG)).toBe(true);
+  });
+
+  test("photo report without a prior shot => 400; after a shot => sends", async () => {
+    const { app, sent } = tempApp();
+    expect((await app.request("/api/verify/test-photo-report", { method: "POST" })).status).toBe(400);
+    await app.request("/api/verify/test-snapshot", { method: "POST" });
+    const res = await app.request("/api/verify/test-photo-report", { method: "POST" });
+    expect(res.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("実機検証テスト");
+  });
+
+  test("camera failure degrades to 502 (never 500/throw)", async () => {
+    const { app } = tempApp({ testSnapshot: async () => null });
+    const res = await app.request("/api/verify/test-snapshot", { method: "POST" });
+    expect(res.status).toBe(502);
+  });
+
+  test("auto-capture arm/disarm reaches the dep and re-renders the fragment", async () => {
+    const { app, armed } = tempApp();
+    const body = new FormData();
+    body.append("armed", "1");
+    const res = await app.request("/ui/verify/auto-capture", { method: "POST", body });
+    expect(res.status).toBe(200);
+    expect(armed).toEqual([true]);
+    expect(await res.text()).toContain("tempPhotoTest");
+  });
+
+  test("the temp section is absent when the temp deps are not wired", async () => {
+    const { repo } = openDbTemp(":memory:");
+    const app = createVerifyAppTemp({
+      repo,
+      runDiagnostics: async () => { throw new Error("unused"); },
+      printerStatus: () => ({ printing: false, job_id: null, percent: 0, remaining_min: 0, gcode_state: "IDLE" }),
+      startDryRun: async () => {},
+      eject: async () => {},
+    });
+    const page = await (await app.request("/verify")).text();
+    expect(page).not.toContain("tempPhotoTest");
+    expect((await app.request("/api/verify/test-snapshot", { method: "POST" })).status).toBe(404);
+  });
+});

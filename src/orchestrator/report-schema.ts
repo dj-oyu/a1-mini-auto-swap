@@ -15,6 +15,8 @@ export const pushStatusSchema = z.object({
   mc_remaining_time: z.coerce.number().catch(0).default(0),
   mc_percent: z.coerce.number().catch(0).default(0),
   subtask_name: z.coerce.string().catch("").default(""),
+  layer_num: z.coerce.number().catch(0).default(0),
+  total_layer_num: z.coerce.number().catch(0).default(0),
   hms: z
     .array(z.object({ attr: z.coerce.number().int(), code: z.coerce.number().int() }))
     .catch([])

@@ -66,3 +66,49 @@ describe("WebhookNotifier (spec 15)", () => {
     expect(aborted).toBe(true);
   });
 });
+
+// spec 13: 通知にカメラスナップショットを直接添付 — multipart photo attachment.
+describe("WebhookNotifier.sendWithPhoto", () => {
+  test("POSTs multipart form-data: payload_json embed references attachment://, file part carries the JPEG", async () => {
+    const forms: FormData[] = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      forms.push(init.body as FormData);
+      return new Response("ok");
+    }) as unknown as typeof fetch;
+
+    const n = new WebhookNotifier({ url: WEBHOOK, baseUrl: "http://host:3000", fetchImpl });
+    const jpeg = Buffer.from([0xff, 0xd8, 0x01, 0x02, 0xff, 0xd9]);
+    await n.sendWithPhoto({ type: "job_finished", jobId: 7, message: "plate done" }, jpeg, "preswap.jpg");
+
+    expect(forms).toHaveLength(1);
+    const form = forms[0]!;
+    expect(form).toBeInstanceOf(FormData);
+
+    const payload = JSON.parse(String(form.get("payload_json")));
+    expect(payload.embeds[0].title).toContain("完了");
+    expect(payload.embeds[0].description).toBe("plate done");
+    expect(payload.embeds[0].image).toEqual({ url: "attachment://preswap.jpg" });
+    expect(payload.embeds[0].url).toBe("http://host:3000/queue/7"); // deep link kept
+
+    const file = form.get("files[0]") as File;
+    expect(file).not.toBeNull();
+    expect(file.name).toBe("preswap.jpg");
+    expect(file.type).toBe("image/jpeg");
+    const bytes = Buffer.from(await file.arrayBuffer());
+    expect(bytes.equals(jpeg)).toBe(true);
+  });
+
+  test("propagates a failed POST as a rejection (callers decide how to degrade)", async () => {
+    const fetchImpl = (async () => {
+      throw new Error("network down");
+    }) as unknown as typeof fetch;
+    const n = new WebhookNotifier({ url: WEBHOOK, fetchImpl });
+    let failed = false;
+    try {
+      await n.sendWithPhoto({ type: "job_finished" }, Buffer.from("x"));
+    } catch {
+      failed = true;
+    }
+    expect(failed).toBe(true);
+  });
+});

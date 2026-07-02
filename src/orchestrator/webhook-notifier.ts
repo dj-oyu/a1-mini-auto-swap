@@ -55,6 +55,30 @@ export class WebhookNotifier implements Notifier {
     }
   }
 
+  /**
+   * Awaitable multipart POST attaching a JPEG to the embed (spec 13: 通知に
+   * カメラスナップショットを直接添付). Discord webhooks take `payload_json`
+   * plus `files[N]` parts; the embed references the upload via
+   * `attachment://<filename>`. Same timeout guard as send(); never used on the
+   * hot notify() path directly — callers decide when a photo is warranted.
+   */
+  async sendWithPhoto(event: NotifyEvent, jpeg: Buffer, filename = "snapshot.jpg"): Promise<void> {
+    const doFetch = this.opts.fetchImpl ?? fetch;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.opts.timeoutMs ?? 5000);
+    try {
+      const payload = this.buildPayload(event) as { embeds: Array<Record<string, unknown>> };
+      payload.embeds[0]!.image = { url: `attachment://${filename}` };
+      const form = new FormData();
+      form.append("payload_json", JSON.stringify(payload));
+      form.append("files[0]", new Blob([new Uint8Array(jpeg)], { type: "image/jpeg" }), filename);
+      // NOTE: no content-type header — fetch sets the multipart boundary itself.
+      await doFetch(this.opts.url, { method: "POST", body: form, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   buildPayload(event: NotifyEvent): unknown {
     const url = this.deepLink(event);
     return {

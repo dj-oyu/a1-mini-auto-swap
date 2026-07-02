@@ -11,6 +11,8 @@ describe("pushStatusSchema", () => {
       mc_remaining_time: 42,
       mc_percent: 37,
       subtask_name: "job-7",
+      layer_num: 12,
+      total_layer_num: 73,
       hms: [{ attr: 50331904, code: 65543 }],
     });
     expect(r).toEqual({
@@ -18,6 +20,8 @@ describe("pushStatusSchema", () => {
       mc_remaining_time: 42,
       mc_percent: 37,
       subtask_name: "job-7",
+      layer_num: 12,
+      total_layer_num: 73,
       hms: [{ attr: 50331904, code: 65543 }],
     });
   });
@@ -27,6 +31,8 @@ describe("pushStatusSchema", () => {
     expect(r.mc_remaining_time).toBe(0);
     expect(r.mc_percent).toBe(0);
     expect(r.subtask_name).toBe("");
+    expect(r.layer_num).toBe(0); // no slice metadata (e.g. dry-rehearsal 3mf)
+    expect(r.total_layer_num).toBe(0);
     expect(r.hms).toEqual([]);
   });
 
