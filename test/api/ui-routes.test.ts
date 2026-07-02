@@ -467,23 +467,22 @@ describe("GET / (dashboard SSR)", () => {
       expect(text).not.toContain("thumbnail?plate=");
     });
 
-    test("the sequence is pre-populated with every plate once, in ascending order", async () => {
+    test("the sequence starts EMPTY (build a word e.g. B,O,B, not remove 25 rows)", async () => {
       const id = repo.createJob({ filename: "multi.3mf" });
       writeCachedThreemf(id, [1, 2, 3]);
 
       const text = await (await app.request(`/ui/queue/${id}/confirm`)).text();
-      // one seq row per plate, ascending; each row carries data-plate + remove control
+      // no pre-populated rows: the sequence <ol> renders empty; rows are appended
+      // client-side by clicking palette chips / 全追加.
       const rows = text.match(/data-seq-item data-plate="plate_\d+"/g) ?? [];
-      expect(rows).toEqual([
-        'data-seq-item data-plate="plate_1"',
-        'data-seq-item data-plate="plate_2"',
-        'data-seq-item data-plate="plate_3"',
-      ]);
-      expect(text).toContain("data-seq-remove");
-      expect(text).toContain("data-seq-up");
-      expect(text).toContain("data-seq-down");
-      // running count reflects the initial sequence length
-      expect(text).toMatch(/data-seq-count[^>]*>3</);
+      expect(rows).toEqual([]);
+      expect(text).toContain("data-seq-list></ol>"); // empty list
+      // running count starts at 0
+      expect(text).toMatch(/data-seq-count[^>]*>0</);
+      // a palette chip per plate is still offered (append-on-click) + 全追加
+      expect(text).toContain('data-plate-add="plate_1"');
+      expect(text).toContain('data-plate-add="plate_3"');
+      expect(text).toContain("data-plate-add-all");
     });
 
     test("a single-plate archive shows no sequence builder (unchanged behaviour)", async () => {

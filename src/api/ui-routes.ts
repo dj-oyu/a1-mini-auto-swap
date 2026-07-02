@@ -481,17 +481,17 @@ function renderPlateSelect(plates: PlateInfo[]): Html {
       </button>
     `,
   );
-  // Initial sequence = every plate once, ascending (the "print all" default).
-  const rows = plates.map((p, i) => seqRow(p.plate, i + 1));
+  // Start EMPTY: building a word (e.g. B,O,B) is a few clicks instead of removing
+  // 25 rows. "全追加" adds every plate once for the "print everything" case.
   return html`
     <div class="plate-select" data-plate-seq>
-      <p class="muted">印刷シーケンス（順番・繰り返し可）：複数プレートを含む3mfです。チップを押すとその順にプレートを追加できます（同じプレートを何度でも追加でき、単語を綴れます）。上の<strong>プレビュー(タブ)</strong>は表示専用で、実際に<strong>印刷するのは下のシーケンス</strong>（この順・この枚数）です。フィラメント一覧はプロジェクト全体の設定です。</p>
+      <p class="muted">印刷シーケンス（順番・繰り返し可）：複数プレートを含む3mfです。チップを押すとその順にプレートを追加できます（同じプレートを何度でも追加でき、単語を綴れます）。初期状態は空で、「全追加」を押すと全プレートを1回ずつ入れられます。上の<strong>プレビュー(タブ)</strong>は表示専用で、実際に<strong>印刷するのは下のシーケンス</strong>（この順・この枚数）です。</p>
       <div class="plate-palette" role="group" aria-label="プレートを追加">
         ${chips}
         <button type="button" class="act plate-add-all" data-plate-add-all>全追加</button>
       </div>
-      <ol class="plate-seq-list" data-seq-list>${rows}</ol>
-      <p class="muted plate-seq-count"><span data-seq-count>${plates.length}</span> 枚</p>
+      <ol class="plate-seq-list" data-seq-list></ol>
+      <p class="muted plate-seq-count"><span data-seq-count>0</span> 枚</p>
       <p class="err plate-seq-error" data-seq-error hidden>印刷するプレートを1枚以上追加してください</p>
     </div>
   `;
@@ -500,20 +500,6 @@ function renderPlateSelect(plates: PlateInfo[]): Html {
 /** One row of the ordered print sequence. data-plate is authoritative on submit
  *  (app.js reads the list top-to-bottom into selected_plates). The index label
  *  is cosmetic — app.js renumbers on every add/remove/reorder. */
-function seqRow(plate: string, idx: number): Html {
-  return html`
-    <li class="plate-seq-item" data-seq-item data-plate="${plate}">
-      <span class="seq-idx">${idx}</span>
-      <span class="seq-label">プレート ${plateNumLabel(plate)}</span>
-      <span class="seq-controls">
-        <button type="button" class="act move" data-seq-up title="上へ" aria-label="上へ">↑</button>
-        <button type="button" class="act move" data-seq-down title="下へ" aria-label="下へ">↓</button>
-        <button type="button" class="act danger" data-seq-remove title="削除" aria-label="この行を削除">✕</button>
-      </span>
-    </li>
-  `;
-}
-
 /** The filament-confirm modal (spec 17 §6): per-slot color swatch + an AMS tray
  *  dropdown. Submitting PATCHes /api/queue/:id/filaments (client-side, see
  *  LIVE_SCRIPT) and moves the job processing→queued. The last line of defense
