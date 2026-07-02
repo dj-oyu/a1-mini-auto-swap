@@ -1,6 +1,7 @@
 import mqtt, { type MqttClient } from "mqtt";
-import type { Clock, Notifier, NotifyEvent } from "../core/ports.ts";
+import type { Clock, Logger, Notifier, NotifyEvent } from "../core/ports.ts";
 import { systemClock } from "../core/ports.ts";
+import { moduleLogger } from "../obs/default-logger.ts";
 
 // Self-hosted Mosquitto republish gateway (spec 16). Normalizes orchestrator
 // state to the `printfarm/*` topics that the Tab5 monitor subscribes to (see
@@ -96,8 +97,10 @@ export class MqttPublisherClient implements MqttPublisher {
   // `reconnectPeriod` and would otherwise spam one warning per attempt forever.
   private lastErrorLoggedAt = 0;
   private static readonly ERROR_LOG_INTERVAL_MS = 60_000;
+  private readonly log: Logger;
 
-  constructor(url: string, opts: { username?: string; password?: string } = {}) {
+  constructor(url: string, opts: { username?: string; password?: string; logger?: Logger } = {}) {
+    this.log = opts.logger ?? moduleLogger("gateway");
     this.conn = mqtt.connect(url, {
       username: opts.username,
       password: opts.password,
@@ -109,7 +112,7 @@ export class MqttPublisherClient implements MqttPublisher {
       const now = Date.now();
       if (now - this.lastErrorLoggedAt >= MqttPublisherClient.ERROR_LOG_INTERVAL_MS) {
         this.lastErrorLoggedAt = now;
-        console.warn(`[gateway] mqtt connection error (${url}): ${err.message}`);
+        this.log.warn("mqtt connection error", { event: "gateway_mqtt_error", url, err: err.message });
       }
     });
   }
