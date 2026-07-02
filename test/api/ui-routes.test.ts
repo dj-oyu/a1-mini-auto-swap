@@ -262,6 +262,25 @@ describe("GET / (dashboard SSR)", () => {
       expect(text).toContain('data-color="#112233"'); // seeded from first filament
       expect(text).toContain(`src="/api/queue/${id}/thumbnail"`); // fallback img
     });
+
+    test("multi-plate (project 3mf) confirm modal shows per-plate tabs + the coloured per-plate mesh source", async () => {
+      const id = repo.createJob({ filename: "multi.3mf", filaments: [{ slot: 1, color: "#112233" }] });
+      // a PROJECT 3mf: plates live in model_settings plater_id, NOT plate_N.gcode
+      const files: Record<string, Uint8Array> = {
+        "3D/3dmodel.model": strToU8("<model><resources/><build/></model>"),
+        "Metadata/model_settings.config": strToU8(
+          `<config><plate><metadata key="plater_id" value="1"/></plate><plate><metadata key="plater_id" value="2"/></plate></config>`,
+        ),
+        "Metadata/project_settings.config": strToU8("{}"),
+      };
+      writeFileSync(join(cacheDir, cacheFileName(id)), Buffer.from(zipSync(files)));
+      const text = await (await app.request(`/ui/queue/${id}/confirm`)).text();
+      // two preview plates → a scrollable tab strip (one tab per plate)…
+      expect(text).toContain('class="plate-tabs"');
+      expect((text.match(/role="tab"/g) ?? []).length).toBe(2);
+      // …and the viewer sources the ACTUAL per-plate mesh (coloured), not /model
+      expect(text).toContain(`data-plate-mesh="/api/plate-mesh?job=${id}"`);
+    });
   });
 
   describe("3D viewer (MVP #6)", () => {

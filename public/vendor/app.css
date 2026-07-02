@@ -92,8 +92,12 @@
   .card-main{flex:1;min-width:0}
   .card-thumb{width:56px;height:56px;flex:none;object-fit:cover;border-radius:8px;background:#eef2f7;border:1px solid var(--line);cursor:pointer}
   .viewer{position:relative;width:100%;height:260px;background:#f6f7f9;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:8px 0 12px}
+  .viewer.viewer-large{height:min(60vh,460px)}
   .viewer canvas{display:block;width:100%;height:100%}
   .viewer-fallback{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+  .plate-tabs{display:flex;gap:6px;overflow-x:auto;padding:2px 0 8px;margin:4px 0 0;scrollbar-width:thin;-webkit-overflow-scrolling:touch}
+  .plate-tab{flex:0 0 auto;padding:6px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:inherit;cursor:pointer;font:inherit;font-size:13px;white-space:nowrap}
+  .plate-tab.is-active{border-color:var(--blue);background:#eef4fd;font-weight:600}
   .card.status-blue{border-left-color:var(--blue)} .card.status-green{border-left-color:var(--green)}
   .card.status-red{border-left-color:var(--red)} .card.status-amber{border-left-color:var(--amber)}
   .card.status-slate{border-left-color:var(--slate)} .card.status-grey{border-left-color:var(--grey)}

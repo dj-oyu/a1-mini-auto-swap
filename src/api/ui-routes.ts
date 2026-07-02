@@ -6,7 +6,7 @@ import { html, raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
 import { projectRemainingSec } from "../core/eta.ts";
 import { cacheFileName } from "../core/artifact.ts";
-import { listPlates, type PlateInfo } from "../injection/threemf.ts";
+import { listPlates, listPreviewPlates, type PlateInfo, type PreviewPlate } from "../injection/threemf.ts";
 import type { Repo } from "../db/repo.ts";
 
 // Re-exported for existing consumers/tests; the ETA aggregation rule itself
@@ -58,6 +58,18 @@ export function createUiApp(deps: { repo: Repo; cacheDir: string }): Hono {
     }
   };
 
+  // Preview-plate list (read-only 3D preview): gcode plates if sliced, else the
+  // model_settings plater_id plates of a project 3mf. Best-effort, never throws.
+  const readCachedPreviewPlates = (jobId: number): PreviewPlate[] => {
+    try {
+      const path = join(cacheDir, cacheFileName(jobId));
+      if (!existsSync(path)) return [];
+      return listPreviewPlates(readFileSync(path));
+    } catch {
+      return [];
+    }
+  };
+
   const snapshot = () => ({
     jobs: repo.listJobs(),
     stocker: repo.getStocker(),
@@ -103,7 +115,8 @@ export function createUiApp(deps: { repo: Repo; cacheDir: string }): Hono {
     const id = Number(c.req.param("id"));
     const job = Number.isInteger(id) && id > 0 ? repo.getJob(id) : null;
     const plates = job ? readCachedPlates(job.id) : [];
-    return c.html(renderConfirmPanel(job, repo.listProjects(), plates));
+    const previewPlates = job ? readCachedPreviewPlates(job.id) : [];
+    return c.html(renderConfirmPanel(job, repo.listProjects(), plates, previewPlates));
   });
 
   // GET /ui/stocker/config — the stocker capacity config modal (spec 11).
@@ -118,7 +131,8 @@ export function createUiApp(deps: { repo: Repo; cacheDir: string }): Hono {
   app.get("/ui/queue/:id/preview", (c) => {
     const id = Number(c.req.param("id"));
     const job = Number.isInteger(id) && id > 0 ? repo.getJob(id) : null;
-    return c.html(renderPreviewPanel(job));
+    const plates = job ? readCachedPreviewPlates(job.id) : [];
+    return c.html(renderPreviewPanel(job, plates));
   });
 
   // ── htmx action routes (MVP #2) ─────────────────────────────────────────────
@@ -328,22 +342,58 @@ function renderSnapshotPanel(): Html {
   `;
 }
 
-/** Read-only 3D preview modal for any job (spec 17 §9). */
-function renderPreviewPanel(job: JobRow | null): Html {
+/** Read-only 3D preview modal for any job (spec 17 §9 / task #23). A multi-plate
+ *  3mf (incl. a PROJECT 3mf with no gcode) shows a horizontally-scrollable strip
+ *  of plate tabs above ONE large viewer; clicking a tab swaps the plate in the
+ *  same WebGL context (viewer.js). Single/none → one large viewer that falls
+ *  back to the whole-archive /model then the thumbnail. */
+function renderPreviewPanel(job: JobRow | null, plates: PreviewPlate[] = []): Html {
   if (!job) {
     return html`<div class="modal-overlay" data-close><div class="modal-box"${MODAL_BOX_A11Y}>ジョブが見つかりません。<div class="modal-actions"><button class="act" data-close>閉じる</button></div></div></div>`;
   }
   const filaments = parseFilaments(job.filaments);
+  const active = plates[0]?.plate;
+  const body =
+    plates.length === 0
+      ? renderViewer(job.id, filaments[0]?.color, false, true) // no plate info → whole-archive
+      : html`
+          ${plates.length > 1 ? renderPlateTabs(plates, active!) : ""}
+          ${renderViewer(job.id, filaments[0]?.color, true, true, active)}
+        `;
   return html`
     <div class="modal-overlay" data-close>
       <div class="modal-box"${MODAL_BOX_A11Y}>
         <h2 class="modal-title">3D プレビュー</h2>
         <p class="muted">${job.filename}</p>
-        ${renderViewer(job.id, filaments[0]?.color)}
+        ${body}
         <div class="modal-actions"><button class="act" data-close>閉じる</button></div>
       </div>
     </div>
   `;
+}
+
+/** Human plate number from a plate id ("plate_24" → "24"). */
+function plateNumLabel(plate: string): string {
+  return plate.replace(/^plate_/, "");
+}
+
+/** A horizontally-scrollable tab strip (one chip per preview-plate). Each tab
+ *  carries data-plate="plate_N"; viewer.js reads the .is-active tab to pick the
+ *  mesh to load and reloads the single viewer on click. Read-only (preview): no
+ *  print-selection semantics — that stays on renderPlateSelect (gcode radios). */
+function renderPlateTabs(plates: PreviewPlate[], active: string): Html {
+  const tabs = plates.map(
+    (p) => html`
+      <button
+        type="button"
+        class="plate-tab${p.plate === active ? " is-active" : ""}"
+        role="tab"
+        aria-selected="${p.plate === active ? "true" : "false"}"
+        data-plate="${p.plate}"
+      >プレート ${plateNumLabel(p.plate)}</button>
+    `,
+  );
+  return html`<div class="plate-tabs" role="tablist" aria-label="プレビューするプレート">${tabs}</div>`;
 }
 
 /** Parse jobs.ams_mapping into a 4-element array of tray indices (-1 default). */
@@ -363,12 +413,23 @@ function parseMapping(json: string | null): number[] {
   return out;
 }
 
-/** A 3D preview container (spec 17 §9). viewer.js loads /model into a Three.js
- *  canvas here; until then / on failure the fallback thumbnail <img> shows. */
-function renderViewer(jobId: number, colorHex?: string): Html {
+/** A 3D preview container (spec 17 §9). viewer.js loads the mesh into a Three.js
+ *  canvas here; until then / on failure the fallback thumbnail <img> shows.
+ *  When `plateMesh` is set (multi-plate upload, task #23) the viewer renders the
+ *  ACTUAL selected plate's geometry via /api/plate-mesh and re-loads whenever the
+ *  plate radio changes; it still falls back to the whole-archive /model and then
+ *  the thumbnail. Single-plate uploads keep the plain /model behaviour. */
+function renderViewer(jobId: number, colorHex?: string, plateMesh = false, large = false, activePlate?: string): Html {
   const color = colorHex && safeHex(colorHex) ? colorHex : "#4b9fea";
+  // data-plate-mesh enables the per-plate source; data-plate seeds the initial
+  // (or single-plate, tab-less) selection so viewer.js can load a plate without
+  // a tab/radio present. viewer.js prefers an active tab / checked radio.
+  const plateAttr = plateMesh
+    ? html` data-plate-mesh="/api/plate-mesh?job=${jobId}"${activePlate ? html` data-plate="${activePlate}"` : ""}`
+    : "";
+  const cls = large ? "viewer viewer-large" : "viewer";
   return html`
-    <div class="viewer" data-model-url="/api/queue/${jobId}/model" data-color="${color}">
+    <div class="${cls}" data-model-url="/api/queue/${jobId}/model" data-color="${color}"${plateAttr}>
       <img class="viewer-fallback" src="/api/queue/${jobId}/thumbnail" alt="" data-onerror="remove" />
     </div>
   `;
@@ -416,7 +477,12 @@ function renderPlateSelect(plates: PlateInfo[], selected: string | null): Html {
  *  dropdown. Submitting PATCHes /api/queue/:id/filaments (client-side, see
  *  LIVE_SCRIPT) and moves the job processing→queued. The last line of defense
  *  against a wrong mapping, so it leans on color, not just text. */
-function renderConfirmPanel(job: JobRow | null, projects: ProjectRow[] = [], plates: PlateInfo[] = []): Html {
+function renderConfirmPanel(
+  job: JobRow | null,
+  projects: ProjectRow[] = [],
+  plates: PlateInfo[] = [],
+  previewPlates: PreviewPlate[] = [],
+): Html {
   if (!job) {
     return html`<div class="modal-overlay" data-close><div class="modal-box"${MODAL_BOX_A11Y}>ジョブが見つかりません。<div class="modal-actions"><button class="act" data-close>閉じる</button></div></div></div>`;
   }
@@ -455,7 +521,8 @@ function renderConfirmPanel(job: JobRow | null, projects: ProjectRow[] = [], pla
       <div class="modal-box"${MODAL_BOX_A11Y}>
         <h2 class="modal-title">フィラメント確認</h2>
         <p class="muted">${job.filename}</p>
-        ${renderViewer(job.id, filaments[0]?.color)}
+        ${previewPlates.length > 1 ? renderPlateTabs(previewPlates, previewPlates[0]!.plate) : ""}
+        ${renderViewer(job.id, filaments[0]?.color, previewPlates.length > 0, false, previewPlates[0]?.plate)}
         ${plates.length > 1 ? renderPlateSelect(plates, job.selected_plate) : ""}
         <div class="fil-list">${rows}</div>
         <label class="proj-assign">プロジェクト

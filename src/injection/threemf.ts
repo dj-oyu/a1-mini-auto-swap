@@ -80,6 +80,62 @@ function readPlateEstimateSeconds(files: Record<string, Uint8Array>, plate: stri
   }
 }
 
+/** A plate to offer in the read-only 3D PREVIEW. Unlike {@link listPlates}
+ *  (printable, gcode-backed), this enumerates plates for ANY 3mf — including a
+ *  PROJECT 3mf (a-d.3mf, Letters) that has geometry + model_settings plates but
+ *  NO Metadata/plate_N.gcode and therefore cannot be printed. `printable` is
+ *  true only for gcode-backed plates; the print-time selection stays on
+ *  {@link listPlates}, so a project-3mf preview never makes a job dispatchable. */
+export interface PreviewPlate {
+  /** e.g. "plate_1" — pass to /api/plate-mesh?plate=… (maps to model_settings plater_id). */
+  plate: string;
+  /** true ⇒ a Metadata/plate_N.gcode exists and this plate can be dispatched. */
+  printable: boolean;
+  /** static per-plate print-time estimate in seconds, when known (gcode only). */
+  estimatedSeconds: number | null;
+}
+
+/**
+ * Enumerate the plates to show in the read-only preview: the gcode plates when
+ * the archive is sliced (printable), else the model_settings <plate> entries of
+ * a project 3mf (preview-only). Returns [] when neither is present. This is the
+ * PREVIEW source; {@link listPlates} remains the PRINTABLE source.
+ */
+export function listPreviewPlates(threemf: Buffer): PreviewPlate[] {
+  const files = unzipSync(threemf);
+  const gcodes = findPlateGcodes(files);
+  if (gcodes.length > 0) {
+    return gcodes.map((gpath) => {
+      const plate = gpath.slice("Metadata/".length, -".gcode".length);
+      return { plate, printable: true, estimatedSeconds: readPlateEstimateSeconds(files, plate) };
+    });
+  }
+  return listModelSettingsPlates(files);
+}
+
+/** Enumerate plater_id plates from Metadata/model_settings.config (project 3mf).
+ *  These are preview-only (no gcode ⇒ not printable). Sorted by plater_id. */
+function listModelSettingsPlates(files: Record<string, Uint8Array>): PreviewPlate[] {
+  const raw = files["Metadata/model_settings.config"];
+  if (!raw) return [];
+  let xml: string;
+  try {
+    xml = strFromU8(raw);
+  } catch {
+    return [];
+  }
+  const ids: number[] = [];
+  const pre = /<plate>([\s\S]*?)<\/plate>/g;
+  let p: RegExpExecArray | null;
+  while ((p = pre.exec(xml)) !== null) {
+    const m = /key="plater_id"\s+value="(\d+)"/.exec(p[1]!);
+    if (m) ids.push(Number(m[1]));
+  }
+  return [...new Set(ids)]
+    .sort((a, b) => a - b)
+    .map((n) => ({ plate: `plate_${n}`, printable: false, estimatedSeconds: null }));
+}
+
 /** Re-extract filament colours/types from project_settings.config (spec 5). */
 export function extractFilaments(threemf: Buffer): FilamentInfo[] {
   const files = unzipSync(threemf);
