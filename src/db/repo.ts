@@ -111,6 +111,13 @@ export class Repo implements QueueStore {
         id,
       );
   }
+  // spec ch8: assign/unassign a job to a project (confirm-step, so a plate joins
+  // a project's sequential build). null clears the assignment.
+  setProject(id: number, projectId: number | null): void {
+    this.db
+      .query("UPDATE jobs SET project_id=?, updated_at=datetime('now') WHERE id=?")
+      .run(projectId, id);
+  }
   // spec ch8: write endpoint for DELETE /api/queue/:id (remove a non-active job).
   deleteJob(id: number): void {
     this.db.query("DELETE FROM jobs WHERE id=?").run(id);

@@ -107,6 +107,7 @@ export function createWriteApp(deps: { repo: Repo; dispatcher: Dispatcher }): Ho
     const body = (await c.req.json().catch(() => ({}))) as {
       ams_mapping?: unknown;
       filaments?: unknown;
+      project_id?: unknown;
     };
     if (!isValidAmsMapping(body.ams_mapping)) {
       return c.json({ error: "ams_mapping must be a 4-element array of -1..3" }, 400);
@@ -114,8 +115,17 @@ export function createWriteApp(deps: { repo: Repo; dispatcher: Dispatcher }): Ho
     if (body.filaments !== undefined && !Array.isArray(body.filaments)) {
       return c.json({ error: "filaments must be an array when provided" }, 400);
     }
+    // project_id: undefined = leave as-is; null = unassign; number = must exist.
+    if (
+      body.project_id !== undefined &&
+      body.project_id !== null &&
+      (!Number.isInteger(body.project_id) || !repo.getProject(body.project_id as number))
+    ) {
+      return c.json({ error: "project_id must be null or an existing project id" }, 400);
+    }
 
     repo.setFilamentPlan(id, body.ams_mapping, body.filaments);
+    if (body.project_id !== undefined) repo.setProject(id, body.project_id as number | null);
     await dispatcher.enqueue(id); // processing → queued (spec ch6)
     for (const a of repo.getUnresolvedPendingActions()) {
       if (a.type === "filament_confirm" && a.job_id === id) repo.resolvePendingAction(a.id);
