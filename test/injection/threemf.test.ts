@@ -78,4 +78,32 @@ describe("injectIntoThreemf (spec 7)", () => {
       /not found/,
     );
   });
+
+  // 実測 2026-07-02: a single letter sliced from a 26-plate project shipped only
+  // Metadata/plate_24.gcode (all 26 PNGs, one gcode). Hardcoding plate_1 failed;
+  // the plate gcode must be auto-discovered, and `param` must reflect it.
+  test("auto-discovers the plate gcode when none is specified (not just plate_1)", () => {
+    const threemf = Buffer.from(
+      zipSync({
+        "Metadata/plate_24.gcode": strToU8(PLATE_GCODE),
+        "Metadata/plate_24.gcode.md5": strToU8("stale"),
+        "Metadata/plate_1.png": strToU8("not gcode"), // thumbnails for other plates present
+        "3D/3dmodel.model": strToU8("<model/>"),
+      }),
+    );
+    const result = injectIntoThreemf(threemf, { endSnippet: "M400" });
+    expect(result.param).toBe("Metadata/plate_24.gcode");
+    const files = unzipSync(result.bytes);
+    expect(strFromU8(files["Metadata/plate_24.gcode"]!)).toContain("M400");
+    expect(strFromU8(files["Metadata/plate_24.gcode.md5"]!)).toBe(result.md5); // sidecar updated
+  });
+
+  test("param is the discovered plate path for a normal plate_1 archive", () => {
+    expect(injectIntoThreemf(makeThreemf(), { endSnippet: "M400" }).param).toBe("Metadata/plate_1.gcode");
+  });
+
+  test("throws a clear error when the archive has no plate gcode at all", () => {
+    const noGcode = Buffer.from(zipSync({ "3D/3dmodel.model": strToU8("<model/>") }));
+    expect(() => injectIntoThreemf(noGcode, { endSnippet: "M400" })).toThrow(/no Metadata\/plate_N\.gcode/);
+  });
 });
