@@ -479,6 +479,19 @@ const POLICY_LABEL: Record<ColorConsistencyPolicy, string> = {
 
 const ACTIVE_STATUSES: JobStatus[] = ["processing", "queued", "printing", "waiting_for_refill"];
 
+/** Rough per-swap overhead added between plates when aggregating a project ETA. */
+const SWAP_SEC = 60;
+
+/** Aggregate remaining seconds for a project's still-to-finish plates (spec 10):
+ *  sum of static slice estimates + one swap per plate boundary. Pure/no-clock —
+ *  the client turns it into a completion time and (for the running plate) swaps
+ *  in the live mc_remaining_time. */
+export function projectRemainingSec(activeJobs: Array<{ estimated_seconds: number | null }>): number {
+  if (activeJobs.length === 0) return 0;
+  const est = activeJobs.reduce((s, j) => s + (j.estimated_seconds ?? 0), 0);
+  return est + (activeJobs.length - 1) * SWAP_SEC;
+}
+
 /** Top navigation shared by the dashboard and the projects page. */
 function nav(active: "queue" | "projects"): Html {
   const cls = (k: string) => (k === active ? "navlink active" : "navlink");
@@ -493,12 +506,19 @@ function projectCard(project: ProjectRow, jobs: JobRow[]): Html {
   const total = mine.length;
   const done = mine.filter((j) => j.status === "success").length;
   const active = mine.filter((j) => ACTIVE_STATUSES.includes(j.status));
-  const remainingSec = active.reduce((s, j) => s + (j.estimated_seconds ?? 0), 0);
+  const etaSec = projectRemainingSec(active);
+  const running = mine.find((j) => j.status === "printing");
   const substituted = mine.some((j) => j.substituted_color != null);
   const opt = (p: ColorConsistencyPolicy) =>
     html`<option value="${p}" ${p === project.color_consistency_policy ? "selected" : ""}>${POLICY_LABEL[p]}</option>`;
   return html`
-    <li class="card proj-card" data-project-id="${project.id}">
+    <li
+      class="card proj-card"
+      data-project-id="${project.id}"
+      data-eta-sec="${etaSec}"
+      data-run-id="${running ? String(running.id) : ""}"
+      data-run-est="${running?.estimated_seconds ?? 0}"
+    >
       <div class="card-main">
         <div class="card-title">
           <span class="filename">${project.name}</span>
@@ -507,7 +527,8 @@ function projectCard(project: ProjectRow, jobs: JobRow[]): Html {
         <div class="card-sub">
           <span>${total} プレート</span>
           <span>完了 ${done}/${total}</span>
-          ${remainingSec > 0 ? html`<span>残り予定 ${fmtDuration(remainingSec)}</span>` : ""}
+          ${etaSec > 0 ? html`<span>残り予定 ${fmtDuration(etaSec)}</span>` : ""}
+          ${etaSec > 0 ? html`<span class="proj-eta" data-eta>完了予定 —</span>` : ""}
         </div>
         <div class="card-sub">
           <label class="policy-label">色ポリシー
@@ -554,9 +575,49 @@ function renderProjectsPage(repo: Repo): Html {
 <body>
   <header class="topbar"><h1>プロジェクト</h1>${nav("projects")}</header>
   <main>${renderProjectsInner(repo)}</main>
+  <script>${raw(PROJECTS_SCRIPT)}</script>
 </body>
 </html>`;
 }
+
+// Per-project completion-time ETA (spec 10). Converts each card's aggregated
+// remaining seconds into a clock in the browser's tz, swapping in the live
+// mc_remaining_time for the project's running plate. Refreshes on a light
+// interval and after htmx swaps (policy toggle / create re-render #projects).
+const PROJECTS_SCRIPT = `
+  (function () {
+    function fmtClock(epoch) {
+      try { return new Date(epoch).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+      catch (e) { return '--:--'; }
+    }
+    var live = null;
+    function render() {
+      document.querySelectorAll('.proj-card[data-eta-sec]').forEach(function (card) {
+        var el = card.querySelector('[data-eta]');
+        if (!el) return;
+        var sec = Number(card.getAttribute('data-eta-sec'));
+        if (!sec || sec <= 0) { el.textContent = '完了予定 —'; return; }
+        var runId = card.getAttribute('data-run-id');
+        var runEst = Number(card.getAttribute('data-run-est')) || 0;
+        var remaining = sec;
+        if (live && live.printing && runId && String(live.job_id) === runId) {
+          remaining = sec - runEst + (Number(live.remaining_min) || 0) * 60;
+        }
+        if (remaining < 0) remaining = 0;
+        el.textContent = '完了予定 ' + fmtClock(Date.now() + remaining * 1000);
+      });
+    }
+    function poll() {
+      fetch('/api/printer/status')
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (s) { live = s; render(); })
+        .catch(render);
+    }
+    poll();
+    setInterval(poll, 30000);
+    document.body.addEventListener('htmx:afterSwap', render);
+  })();
+`;
 
 function renderDashboard(data: DashboardData): Html {
   return html`<!doctype html>

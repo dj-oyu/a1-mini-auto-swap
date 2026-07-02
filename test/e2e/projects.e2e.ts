@@ -12,6 +12,10 @@ test.describe("projects page", () => {
     await expect(page.locator(".proj-card", { hasText: "Gridfinity Bins" })).toBeVisible();
     // Benchy Fleet has 3 plates, 1 done (benchy_chimney success)
     await expect(page.locator(".proj-card", { hasText: "Benchy Fleet" })).toContainText("完了 1/3");
+    // per-project completion clock is computed client-side (HH:MM)
+    await expect(page.locator(".proj-card", { hasText: "Benchy Fleet" }).locator(".proj-eta")).toContainText(
+      /完了予定 \d{2}:\d{2}/,
+    );
   });
 
   test("正常系: toggling a project's policy persists via htmx", async ({ page }) => {
