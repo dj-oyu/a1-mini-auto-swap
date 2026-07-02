@@ -97,13 +97,16 @@ const mqtt = new OrchestratorMqttClient({
  *  (The POST /api/queue upload that populates the cache is a later slice.) */
 const resolver: ArtifactResolver = (job) => {
   const original = readFileSync(join(CACHE_DIR, cacheFileName(job.id)));
-  const { bytes } = injectIntoThreemf(original, { endSnippet: SWAP_SNIPPET });
+  // `param` is the ACTUAL plate gcode path inside the archive — a single-plate
+  // export from a multi-plate project keeps its original number (plate_24, not
+  // plate_1), so it's discovered, never hardcoded (実測 2026-07-02).
+  const { bytes, param } = injectIntoThreemf(original, { endSnippet: SWAP_SNIPPET });
   // remoteName/url use the job- prefixed printer-side name: the printer echoes
   // it as subtask_name, which the monitor correlates on (core/artifact.ts).
   return {
     bytes,
     remoteName: printArtifactName(job.id),
-    param: "Metadata/plate_1.gcode",
+    param,
     url: `ftp:///cache/${printArtifactName(job.id)}`,
     amsMapping: parseAmsMapping(job.ams_mapping), // validated, throws on corrupt data (INV-MQTT-01)
   };

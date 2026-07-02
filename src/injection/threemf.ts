@@ -14,7 +14,10 @@ export interface FilamentInfo {
 }
 
 export interface InjectOptions {
-  /** plate id, default "plate_1" */
+  /** plate id (e.g. "plate_24"). Default: auto-discover the archive's single
+   *  Metadata/plate_N.gcode. A single-plate export from a multi-plate project
+   *  keeps its ORIGINAL plate number (実測: a letter sliced from a 26-letter
+   *  project shipped only Metadata/plate_24.gcode) — assuming plate_1 fails. */
   plate?: string;
   /** the swap/end sequence to append (may contain {name} placeholders) */
   endSnippet: string;
@@ -23,7 +26,17 @@ export interface InjectOptions {
 export interface InjectResult {
   bytes: Buffer;
   md5: string;
+  /** The plate gcode path inside the archive (e.g. "Metadata/plate_24.gcode").
+   *  The MQTT project_file `param` MUST use this, not a hardcoded plate_1. */
+  param: string;
   warnings: string[];
+}
+
+/** Discover the plate gcode entries (Metadata/plate_N.gcode, excluding .md5). */
+export function findPlateGcodes(files: Record<string, Uint8Array>): string[] {
+  return Object.keys(files)
+    .filter((n) => /^Metadata\/plate_\d+\.gcode$/i.test(n))
+    .sort();
 }
 
 /** Re-extract filament colours/types from project_settings.config (spec 5). */
@@ -62,11 +75,21 @@ export function extractThumbnail(threemf: Buffer): Uint8Array | null {
  * from the gcode HEADER block (INV-INJECT-02).
  */
 export function injectIntoThreemf(threemf: Buffer, opts: InjectOptions): InjectResult {
-  const plate = opts.plate ?? "plate_1";
-  const gpath = `Metadata/${plate}.gcode`;
+  const files = unzipSync(threemf);
+  const warnings: string[] = [];
+
+  // Resolve the plate gcode path: explicit override, else auto-discover.
+  let gpath: string;
+  if (opts.plate) {
+    gpath = `Metadata/${opts.plate}.gcode`;
+  } else {
+    const plates = findPlateGcodes(files);
+    if (plates.length === 0) throw new Error("no Metadata/plate_N.gcode found in 3mf");
+    if (plates.length > 1) warnings.push(`multiple plate gcodes ${plates.join(", ")}; using ${plates[0]}`);
+    gpath = plates[0]!;
+  }
   const mpath = `${gpath}.md5`;
 
-  const files = unzipSync(threemf);
   const gbytes = files[gpath];
   if (!gbytes) throw new Error(`${gpath} not found in 3mf`);
 
@@ -79,7 +102,7 @@ export function injectIntoThreemf(threemf: Buffer, opts: InjectOptions): InjectR
   out[gpath] = strToU8(injected);
   out[mpath] = strToU8(md5);
 
-  return { bytes: Buffer.from(zipSync(out)), md5, warnings: resolved.warnings };
+  return { bytes: Buffer.from(zipSync(out)), md5, param: gpath, warnings: [...warnings, ...resolved.warnings] };
 }
 
 /** Parse `; key = value` lines inside the `; HEADER_BLOCK_START..END` block (spec 7). */
