@@ -1,42 +1,57 @@
-// 3D preview viewer (spec 17 §9 / MVP #6 + task #23 per-plate mesh). Loads a
+// 3D preview viewer (spec 17 §9 / MVP #6 + task #23 per-plate tabs). Loads a
 // mesh into a Three.js scene with custom pointer-drag rotation + wheel zoom (no
 // OrbitControls addon needed). Progressive: if WebGL or the fetch fails, the
 // container's fallback <img> thumbnail stays visible.
 //
-// Two sources:
-//   • data-model-url         → GET /api/queue/:id/model    (whole-archive soup)
+// Sources:
+//   • data-model-url         → GET /api/queue/:id/model    (whole-archive scene)
 //   • data-plate-mesh (base) → GET /api/plate-mesh?job=:id&plate=plate_N
-// When data-plate-mesh is present (multi-plate upload) the viewer renders the
-// ACTUAL selected plate and reloads whenever the plate radio changes, falling
-// back to the whole-archive /model and then the thumbnail. The mesh JSON is
-// { positions:number[], indices:number[], bbox?, groups? } — coloring (groups →
-// filament colour) is a later stage; here a single neutral material is used.
+// When data-plate-mesh is present the viewer renders the ACTUAL selected plate.
+// The active plate is chosen from (in priority order) the active tab
+// (.plate-tab.is-active[data-plate], read-only preview), a checked radio
+// (input[name="plate"]:checked, print-selection confirm modal), or the viewer's
+// own data-plate seed. Clicking a tab / changing a radio reloads the mesh IN THE
+// SAME WebGL context — the old BufferGeometry+material are disposed and the new
+// geometry is loaded, recentering the camera on its bounding sphere (no new
+// renderer/context per switch). Falls back to /model then the thumbnail.
 //
 // Vendored Three.js (no CDN — LAN/tailnet self-hosted). `three` is resolved by
 // the import map in the page head to /vendor/three.module.min.js.
 import * as THREE from "three";
 
-/** URL of the selected plate's mesh, or null when this isn't a plate viewer. */
+/** URL of the active plate's mesh, or null when this isn't a plate viewer. */
 function plateUrl(el) {
   const base = el.getAttribute("data-plate-mesh");
   if (!base) return null;
   const modal = el.closest(".modal-box") || el.parentElement;
-  const checked = modal && modal.querySelector('input[name="plate"]:checked');
-  if (!checked || !checked.value) return null;
-  return base + "&plate=" + encodeURIComponent(checked.value);
+  const tab = modal && modal.querySelector(".plate-tab.is-active[data-plate]");
+  const radio = modal && modal.querySelector('input[name="plate"]:checked');
+  const plate =
+    (tab && tab.getAttribute("data-plate")) ||
+    (radio && radio.value) ||
+    el.getAttribute("data-plate");
+  return plate ? base + "&plate=" + encodeURIComponent(plate) : null;
 }
 
 function initOne(el) {
   el.dataset.ready = "1";
   if (!window.WebGLRenderingContext) return; // keep the fallback img
 
-  // Multi-plate upload: reload the mesh whenever the chosen plate changes.
   if (el.getAttribute("data-plate-mesh")) {
     const modal = el.closest(".modal-box") || el.parentElement;
     if (modal) {
-      modal
-        .querySelectorAll('input[name="plate"]')
-        .forEach((r) => r.addEventListener("change", () => load(el)));
+      // Tabs (read-only preview): activate the clicked tab, then swap geometry.
+      modal.querySelectorAll(".plate-tab[data-plate]").forEach((tab) =>
+        tab.addEventListener("click", () => {
+          modal.querySelectorAll(".plate-tab").forEach((t) => t.classList.remove("is-active"));
+          tab.classList.add("is-active");
+          load(el);
+        }),
+      );
+      // Radios (print-selection confirm modal): reload on change.
+      modal.querySelectorAll('input[name="plate"]').forEach((r) =>
+        r.addEventListener("change", () => load(el)),
+      );
     }
   }
   load(el);
@@ -49,9 +64,8 @@ function hasGeometry(mesh) {
   return !!mesh && (mesh.positions || []).length > 0 && (mesh.indices || []).length > 0;
 }
 
-/** Fetch the current mesh (plate mesh when a plate is selected, else the whole
- *  model) and mount it. On failure keep whatever is shown (canvas or thumbnail);
- *  a failed plate mesh falls back to the whole-archive /model. */
+/** Fetch the current mesh (active plate, else whole model) and show it. On
+ *  failure keep whatever is shown; a failed plate mesh falls back to /model. */
 function load(el) {
   const pUrl = plateUrl(el);
   const modelUrl = el.getAttribute("data-model-url");
@@ -59,13 +73,13 @@ function load(el) {
   if (!primary) return;
   fetchMesh(primary)
     .then((mesh) => {
-      if (hasGeometry(mesh)) mount(el, mesh);
+      if (hasGeometry(mesh)) show(el, mesh);
     })
     .catch(() => {
       if (pUrl && modelUrl) {
         fetchMesh(modelUrl)
           .then((mesh) => {
-            if (hasGeometry(mesh)) mount(el, mesh);
+            if (hasGeometry(mesh)) show(el, mesh);
           })
           .catch(() => {
             /* leave the fallback thumbnail in place */
@@ -75,49 +89,18 @@ function load(el) {
     });
 }
 
-function mount(el, data) {
-  const positions = Float32Array.from(data.positions || []);
-  const indices = data.indices || [];
-  if (!positions.length || !indices.length) return;
+/** Build the persistent renderer/scene/camera/interaction ONCE per container.
+ *  Geometry is swapped in later via setGeometry — never a new context. */
+function ensureContext(el) {
+  if (el.__ctx) return el.__ctx;
 
   const width = el.clientWidth || 400;
   const height = el.clientHeight || 260;
 
-  // Dispose any previous scene (plate switch re-mounts into the same container).
-  if (el.__renderer) {
-    try {
-      el.__renderer.dispose();
-      el.__renderer.forceContextLoss();
-    } catch {
-      /* ignore */
-    }
-    el.__renderer = null;
-  }
-
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xf6f7f9);
-
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  geo.setIndex(indices);
-  geo.computeVertexNormals();
-  geo.computeBoundingSphere();
-
-  const material = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(el.getAttribute("data-color") || "#4b9fea"),
-    metalness: 0.1,
-    roughness: 0.75,
-    flatShading: false,
-  });
-  const model = new THREE.Mesh(geo, material);
-
-  // center the model at the origin so drag-rotation spins around its middle
-  const sphere = geo.boundingSphere;
   const group = new THREE.Group();
-  model.position.set(-sphere.center.x, -sphere.center.y, -sphere.center.z);
-  group.add(model);
-  // 3MF is Z-up; tilt to a pleasant default 3/4 view
-  group.rotation.x = -Math.PI / 2;
+  group.rotation.x = -Math.PI / 2; // 3MF is Z-up; tilt to a pleasant 3/4 view
   scene.add(group);
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.6));
@@ -128,10 +111,8 @@ function mount(el, data) {
   fill.position.set(-1, 0.5, -1);
   scene.add(fill);
 
-  const radius = sphere.radius || 50;
-  const camera = new THREE.PerspectiveCamera(45, width / height, radius / 100, radius * 20);
-  let dist = radius * 2.6;
-  camera.position.set(0, 0, dist);
+  const camera = new THREE.PerspectiveCamera(45, width / height, 0.5, 5000);
+  camera.position.set(0, 0, 100);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -139,18 +120,11 @@ function mount(el, data) {
   el.innerHTML = "";
   el.appendChild(renderer.domElement);
   el.classList.add("viewer-live");
-  el.__renderer = renderer;
 
-  function render() {
-    camera.position.z = dist;
+  const ctx = { renderer, scene, camera, group, mesh: null, material: null, radius: 50, dist: 130 };
+  ctx.render = () => {
+    camera.position.z = ctx.dist;
     renderer.render(scene, camera);
-  }
-  render();
-
-  // recolor hook: the confirm modal calls this when a slot color changes
-  el.__setColor = (hex) => {
-    if (hex) material.color.set(hex);
-    render();
   };
 
   // pointer-drag rotate
@@ -173,7 +147,7 @@ function mount(el, data) {
     group.rotation.x += (e.clientY - py) * 0.01;
     px = e.clientX;
     py = e.clientY;
-    render();
+    ctx.render();
   });
   const endDrag = (e) => {
     dragging = false;
@@ -187,11 +161,64 @@ function mount(el, data) {
     "wheel",
     (e) => {
       e.preventDefault();
-      dist = Math.max(radius * 1.1, Math.min(radius * 8, dist * (1 + Math.sign(e.deltaY) * 0.12)));
-      render();
+      ctx.dist = Math.max(ctx.radius * 1.1, Math.min(ctx.radius * 8, ctx.dist * (1 + Math.sign(e.deltaY) * 0.12)));
+      ctx.render();
     },
     { passive: false },
   );
+
+  // recolor hook: the confirm modal calls this when a slot color changes
+  el.__setColor = (hex) => {
+    if (hex && ctx.material) ctx.material.color.set(hex);
+    ctx.render();
+  };
+
+  el.__ctx = ctx;
+  return ctx;
+}
+
+/** Swap in new geometry, disposing the previous BufferGeometry+material, and
+ *  recenter the camera on the new bounding sphere. Reuses the same context. */
+function setGeometry(ctx, el, data) {
+  if (ctx.mesh) {
+    ctx.group.remove(ctx.mesh);
+    ctx.mesh.geometry.dispose();
+    ctx.mesh.material.dispose();
+    ctx.mesh = null;
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(Float32Array.from(data.positions || []), 3));
+  geo.setIndex(data.indices || []);
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+
+  const material = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(el.getAttribute("data-color") || "#4b9fea"),
+    metalness: 0.1,
+    roughness: 0.75,
+    flatShading: false,
+  });
+  const mesh = new THREE.Mesh(geo, material);
+
+  const sphere = geo.boundingSphere;
+  mesh.position.set(-sphere.center.x, -sphere.center.y, -sphere.center.z);
+  ctx.group.add(mesh);
+  ctx.mesh = mesh;
+  ctx.material = material;
+
+  ctx.radius = sphere.radius || 50;
+  ctx.dist = ctx.radius * 2.6;
+  ctx.camera.near = Math.max(ctx.radius / 100, 0.01);
+  ctx.camera.far = ctx.radius * 20;
+  ctx.camera.updateProjectionMatrix();
+  ctx.render();
+}
+
+function show(el, data) {
+  if (!(data.positions || []).length || !(data.indices || []).length) return;
+  const ctx = ensureContext(el);
+  setGeometry(ctx, el, data);
 }
 
 /** Scan for freshly-inserted .viewer containers and initialize each once. */
