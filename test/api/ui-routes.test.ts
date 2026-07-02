@@ -440,6 +440,29 @@ describe("GET / (dashboard SSR)", () => {
     });
   });
 
+  describe("camera snapshot (spec 17 §5)", () => {
+    test("the statusline has a camera button opening the snapshot modal", async () => {
+      const r = await body();
+      expect(r.text).toContain("カメラ");
+      expect(r.text).toContain('hx-get="/ui/snapshot"');
+      expect(r.text).toContain('hx-target="#modal"');
+    });
+
+    test("GET /ui/snapshot renders the modal with the snapshot img + refresh", async () => {
+      const res = await app.request("/ui/snapshot");
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).toContain('class="snapshot"');
+      expect(text).toContain('src="/api/printer/snapshot"');
+      expect(text).toContain("data-snap-refresh");
+      expect(text).toContain("スナップショットがありません"); // graceful empty
+    });
+
+    test("the client wires the snapshot refresh", async () => {
+      expect(await asset("/vendor/app.js")).toContain("data-snap-refresh");
+    });
+  });
+
   describe("live updates (MVP #3)", () => {
     test("the page subscribes to the SSE stream", async () => {
       expect((await body()).text).toContain('src="/vendor/app.js"');

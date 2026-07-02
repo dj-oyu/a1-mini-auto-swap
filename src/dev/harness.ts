@@ -9,6 +9,7 @@ import { createUploadApp } from "../api/upload-routes.ts";
 import { createThumbnailApp } from "../api/thumbnail-routes.ts";
 import { createModelApp } from "../api/model-routes.ts";
 import { createPrinterApp, printerStatusView, type PrinterStatusSource } from "../api/printer-routes.ts";
+import { createSnapshotApp, type SnapshotSource } from "../api/snapshot-routes.ts";
 import { createUiApp } from "../api/ui-routes.ts";
 import { createEventsApp } from "../api/events-routes.ts";
 import { createAuth, createLoginApp } from "../api/auth.ts";
@@ -72,6 +73,19 @@ app.route("/", createModelApp({ repo, cacheDir }));
 let fake = { gcodeState: "RUNNING", mcPercent: 42, mcRemainingTime: 73 };
 const fakeStatus: PrinterStatusSource = { latest: () => fake };
 app.route("/", createPrinterApp({ repo, status: fakeStatus }));
+// Placeholder camera frame (valid 1×1 PNG) so the camera modal is exercisable.
+const fakeSnapshot: SnapshotSource = {
+  latest: () => ({
+    contentType: "image/png",
+    bytes: new Uint8Array(
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+        "base64",
+      ),
+    ),
+  }),
+};
+app.route("/", createSnapshotApp({ source: fakeSnapshot }));
 app.route("/", createUiApp(repo));
 app.route("/", createEventsApp(sse));
 

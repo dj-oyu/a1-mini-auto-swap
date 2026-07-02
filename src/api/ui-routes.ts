@@ -81,6 +81,10 @@ export function createUiApp(repo: Repo): Hono {
     return c.html(renderConfirmPanel(job, repo.listProjects()));
   });
 
+  // GET /ui/snapshot — the camera modal (spec 17 §5). The <img> points at the
+  // snapshot API; 更新 re-fetches with a cache-buster (see app.js).
+  app.get("/ui/snapshot", (c) => c.html(renderSnapshotPanel()));
+
   // GET /ui/queue/:id/preview — a read-only 3D preview modal (any job), opened
   // by clicking a card's thumbnail (spec 17 §9).
   app.get("/ui/queue/:id/preview", (c) => {
@@ -260,6 +264,29 @@ function cardActions(job: JobRow): Html {
   }
   if (buttons.length === 0) return html``;
   return html`<div class="card-actions">${buttons}</div>`;
+}
+
+/** Camera snapshot modal (spec 17 §5). The img 404s gracefully to a message
+ *  when no frame is available; 更新 reloads it with a cache-buster. */
+function renderSnapshotPanel(): Html {
+  return html`
+    <div class="modal-overlay" data-close>
+      <div class="modal-box">
+        <h2 class="modal-title">カメラ</h2>
+        <img
+          class="snapshot"
+          src="/api/printer/snapshot"
+          alt="printer camera"
+          onerror="this.hidden=true;var m=this.parentNode.querySelector('.snapshot-none');if(m)m.hidden=false;"
+        />
+        <p class="muted snapshot-none" hidden>スナップショットがありません</p>
+        <div class="modal-actions">
+          <button class="act" data-snap-refresh>更新</button>
+          <button class="act" data-close>閉じる</button>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 /** Read-only 3D preview modal for any job (spec 17 §9). */
@@ -459,7 +486,10 @@ function renderDashboardInner(data: DashboardData): Html {
       ? html`<li class="empty">キューは空です</li>`
       : html`${jobs.map(jobCard)}`;
   return html`<div id="dashboard">
-    <div class="statusline">${stockerChip(stocker)}</div>
+    <div class="statusline">
+      <button class="act cam" hx-get="/ui/snapshot" hx-target="#modal" hx-swap="innerHTML">📷 カメラ</button>
+      ${stockerChip(stocker)}
+    </div>
     ${printingHeader(jobs)}
     ${pendingBanner(pending)}
     <main><ul class="queue">${cards}</ul></main>
