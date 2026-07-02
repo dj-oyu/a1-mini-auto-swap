@@ -38,6 +38,7 @@ import { throttleUploadProgress } from "./orchestrator/upload-progress-throttle.
 import { createRuntimeLogger } from "./obs/index.ts";
 import { StateLog } from "./orchestrator/state-log.ts";
 import { ReportRecorder } from "./orchestrator/report-recorder.ts";
+import { createLogsApp } from "./api/logs-routes.ts";
 
 // Orchestrator entrypoint (spec 3): wires every adapter from env config into the
 // running core loop, and serves the HTTP API. Thin — the assembly logic lives
@@ -102,6 +103,20 @@ const mqtt = new OrchestratorMqttClient({
   serial: PRINTER_SERIAL,
   accessCode: PRINTER_ACCESS_CODE,
 });
+
+// Audit recorders (task #24), driven off the SINGLE MQTT connection's "report"
+// firehose. Both are wired here — the composition root — so nothing else has to
+// know they exist:
+//   • StateLog (stream 2, ALWAYS ON): one low-volume line per meaningful state
+//     change → console + data/logs/state-*.jsonl (the fault-diagnosis trail).
+//   • ReportRecorder (stream 3, MQTT_LOG=1 only): the verbatim high-volume raw
+//     dump → data/mqtt-log/YYYY-MM-DD.jsonl (turned on to debug a protocol quirk).
+const stateLog = new StateLog(mqtt, stateLogger);
+stateLog.start();
+const reportRecorder = logConfig.mqttLog
+  ? new ReportRecorder(mqtt, { dir: logConfig.mqttLogDir, retentionDays: logConfig.retentionDays })
+  : undefined;
+reportRecorder?.start();
 
 /** Real artifact resolver (Phase 4c): read the uploaded 3mf from cache, inject
  *  the swap sequence + recompute the MD5 sidecar, return the upload bytes.
@@ -297,6 +312,17 @@ app.route(
   }),
 );
 app.route("/", createUiApp({ repo, cacheDir: CACHE_DIR })); // GET / → server-rendered dashboard (spec 17)
+// GET /logs (viewer) + GET /api/logs (JSON) — the audit-log viewer (task #24).
+// Read-only tail of the app/state streams (+ the raw report firehose when
+// MQTT_LOG=1). Behind AUTH_TOKEN with everything else; never serves raw files.
+app.route(
+  "/",
+  createLogsApp({
+    logDir: logConfig.logDir,
+    mqttLogDir: logConfig.mqttLogDir,
+    mqttLogEnabled: logConfig.mqttLog,
+  }),
+);
 // ── TEMPORARY (実機検証用 — 確認後に削除, task#16): swap直前スナップ+Discord ──
 // Field test of the pre-swap snapshot pipeline: camera relay frame → save →
 // Discord photo attachment. Auto trigger: while armed, fire ONCE when a
@@ -386,11 +412,25 @@ console.log(`  printer   mqtts://${PRINTER_HOST}:${PRINTER_MQTT_PORT} (serial ${
 console.log(gateway ? `  gateway   ${MOSQUITTO_URL} → printfarm/*` : `  gateway   disabled (MOSQUITTO_URL unset)`);
 console.log(`  webhook   ${DISCORD_WEBHOOK_URL ? "enabled" : "disabled"}`);
 console.log(`  HTTP API  http://0.0.0.0:${server.port}`);
+// A structured boot record on the app stream: it also guarantees
+// data/logs/app-*.jsonl exists from the first second (the RotatingFileSink
+// creates the file lazily on first write, so an otherwise-quiet idle boot would
+// leave the dir empty and look broken). No secrets — accessCode is redacted by
+// the logger regardless (obs/redact.ts).
+log.info("orchestrator started", {
+  event: "boot",
+  httpPort: server.port,
+  printerHost: PRINTER_HOST,
+  mqttLog: logConfig.mqttLog,
+  gateway: Boolean(gateway),
+});
 
 const shutdown = async () => {
   server.stop(true);
   clearInterval(escalationTimer);
   orch.monitor.stop();
+  stateLog.stop();
+  reportRecorder?.stop();
   await mqtt.close();
   process.exit(0);
 };
