@@ -49,6 +49,8 @@
   .act:hover{background:#f3f4f6}
   .card-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}
   .act.move{padding:5px 10px;font-weight:700;line-height:1}
+  .drag-handle{cursor:grab;touch-action:none;user-select:none;color:var(--muted)}
+  .card.dragging{opacity:.5;outline:2px dashed var(--blue)}
   .act.danger{border-color:var(--red);color:var(--red)}
   .act.danger:hover{background:#fdeaea}
   .act.primary{background:var(--blue);border-color:var(--blue);color:#fff}
