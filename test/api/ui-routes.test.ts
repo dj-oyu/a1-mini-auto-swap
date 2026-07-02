@@ -494,6 +494,19 @@ describe("GET / (dashboard SSR)", () => {
       expect(js).toContain("/ui/dashboard");
     });
 
+    test("a hidden connChip is wired to the EventSource's error/open lifecycle", async () => {
+      const html = (await body()).text;
+      expect(html).toContain('id="connChip"');
+      // calm styling only — red is reserved for "stop" (spec 17)
+      expect(html).not.toContain('id="connChip" class="conn-chip red"');
+      const js = await asset("/vendor/app.js");
+      expect(js).toContain("PF.watchConnection(es, document.getElementById('connChip'))");
+      const shared = await asset("/vendor/shared.js");
+      expect(shared).toContain("PF.watchConnection");
+      expect(shared).toContain("addEventListener('error'");
+      expect(shared).toContain("addEventListener('open'");
+    });
+
     test("GET /ui/dashboard returns just the reactive fragment", async () => {
       repo.setStocker(8, 5);
       const res = await app.request("/ui/dashboard");

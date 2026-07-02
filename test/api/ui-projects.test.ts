@@ -110,6 +110,72 @@ describe("projects page", () => {
     });
   });
 
+  describe("live updates via SSE (projects page)", () => {
+    test("projects.js subscribes to /events instead of a 30s poll loop", async () => {
+      const js = await (await app.request("/vendor/projects.js")).text();
+      expect(js).toContain("new EventSource('/events')");
+      // plate-completion events refetch the #projects fragment (progress/ETA changed)
+      expect(js).toContain("job_finished");
+      expect(js).toContain("job_failed");
+      expect(js).toContain("aborted");
+      expect(js).toContain("/ui/projects");
+      expect(js).toContain("target: '#projects'");
+      // push-based measured ETA still applies each frame directly, like app.js
+      expect(js).toContain("es.addEventListener('progress'");
+      expect(js).toContain("JSON.parse(e.data)");
+      // the 30s poll survives only as the no-EventSource fallback, not as the
+      // steady-state update mechanism
+      expect(js).toContain("if (!window.EventSource)");
+      expect(js).toContain("setInterval(poll, 30000)");
+    });
+
+    test("client debounces refetch bursts (150ms coalescing, matching app.js's #dashboard pattern)", async () => {
+      const js = await (await app.request("/vendor/projects.js")).text();
+      expect(js).toContain("clearTimeout(refreshTimer)");
+      expect(js).toContain("setTimeout(function () {");
+      expect(js).toContain("}, 150)");
+    });
+
+    test("job_finished/job_failed/aborted are real wire events the broadcaster emits, so the client's listeners actually fire", async () => {
+      // Cross-check against the live SSE endpoint (not just grepping the client
+      // source): projects.js listens for these three type names — assert the
+      // real Notifier→SseBroadcaster pipeline emits frames named exactly that,
+      // so a client subscribed as projects.js does would truly receive them.
+      const { SseBroadcaster } = await import("../../src/orchestrator/sse-notifier.ts");
+      const broadcaster = new SseBroadcaster();
+      const { createEventsApp } = await import("../../src/api/events-routes.ts");
+      const eventsApp = createEventsApp(broadcaster);
+      const res = await eventsApp.request("/events");
+      const reader = res.body!.getReader();
+      const dec = new TextDecoder();
+      await reader.read(); // ": connected" comment
+
+      for (const type of ["job_finished", "job_failed", "aborted"] as const) {
+        broadcaster.notify({ type });
+        const chunk = await reader.read();
+        const text = dec.decode(chunk.value);
+        expect(text).toContain(`event: ${type}`);
+      }
+      await reader.cancel();
+    });
+  });
+
+  describe("SSE connection indicator (projects page)", () => {
+    test("the page ships a hidden connChip that projects.js wires to the EventSource", async () => {
+      const html = await (await app.request("/projects")).text();
+      expect(html).toContain('id="connChip"');
+      expect(html).toContain("hidden");
+      // calm styling only — no red (spec 17: red is reserved for "stop")
+      expect(html).not.toContain('id="connChip" class="conn-chip red"');
+      const js = await (await app.request("/vendor/projects.js")).text();
+      expect(js).toContain("PF.watchConnection(es, document.getElementById('connChip'))");
+      const shared = await (await app.request("/vendor/shared.js")).text();
+      expect(shared).toContain("PF.watchConnection");
+      expect(shared).toContain("addEventListener('error'");
+      expect(shared).toContain("addEventListener('open'");
+    });
+  });
+
   test("both pages expose the nav", async () => {
     const dash = await (await app.request("/")).text();
     const proj = await (await app.request("/projects")).text();

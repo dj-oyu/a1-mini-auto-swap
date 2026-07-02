@@ -16,4 +16,14 @@
       .then(cb)
       .catch(function () { cb(null); });
   };
+
+  // Surfaces an EventSource's connectivity as a small, calm indicator (spec 17:
+  // red is reserved for "stop" — this is amber/neutral, not alarming). `el` is
+  // the chip element (hidden by default in the markup); shown while the stream
+  // is down, hidden again once the browser's auto-reconnect brings it back up.
+  PF.watchConnection = function (es, el) {
+    if (!es || !el) return;
+    es.addEventListener('error', function () { el.hidden = false; });
+    es.addEventListener('open', function () { el.hidden = true; });
+  };
 })();
