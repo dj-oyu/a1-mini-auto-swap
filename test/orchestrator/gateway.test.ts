@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  LogThrottle,
   MqttPublisherClient,
   PrintfarmGateway,
   TOPICS,
@@ -104,10 +105,26 @@ describe("PrintfarmGateway (spec 16, Tab5 contract)", () => {
   });
 });
 
+describe("LogThrottle (deterministic rate limit — no wall-clock)", () => {
+  test("passes once per interval, suppresses repeats within it, re-arms after it elapses", () => {
+    let t = 1_000_000;
+    const throttle = new LogThrottle({ now: () => t }, 60_000);
+    expect(throttle.allow()).toBe(true); // first ever → passes
+    expect(throttle.allow()).toBe(false); // same instant → suppressed
+    t += 59_999;
+    expect(throttle.allow()).toBe(false); // just under the interval → still suppressed
+    t += 1;
+    expect(throttle.allow()).toBe(true); // exactly at the interval → re-armed
+    expect(throttle.allow()).toBe(false); // immediately after → suppressed again
+  });
+});
+
 describe("MqttPublisherClient (no broker present, Windows-dev-box robustness)", () => {
-  test("connecting to an unreachable broker does not crash the process (error is handled, logged, rate-limited)", async () => {
+  test("connecting to an unreachable broker does not crash the process; the error is logged", async () => {
     // Capture the gateway's own structured log (not console): inject a Logger
-    // backed by a MemorySink so we assert on the written records.
+    // backed by a MemorySink so we assert on the written records. The interval
+    // rate-limit itself is covered deterministically by the LogThrottle test
+    // above — here we only prove crash-safety + that the failure surfaces once.
     const mem = new MemorySink();
     const logger = createLogger({ level: "warn", sinks: [mem], clock });
     const warnings = () => mem.records().filter((r) => r.level === "warn");
@@ -115,17 +132,11 @@ describe("MqttPublisherClient (no broker present, Windows-dev-box robustness)", 
     // used to emit an unhandled 'error' and crash the whole process.
     const client = new MqttPublisherClient("mqtt://127.0.0.1:59991", { logger });
     try {
-      // Reaching this point at all (vs. the process dying) is the main
-      // assertion; also confirm the failure was logged exactly once even
-      // though mqtt.js will keep retrying (reconnectPeriod: 1000ms).
+      // Reaching this point at all (vs. the process dying) is the main assertion.
+      // waitFor polls a real async socket 'error' event — not a fixed sleep.
       await waitFor(() => warnings().length >= 1);
       expect(warnings()[0]!.msg).toContain("mqtt connection error");
       expect(warnings()[0]!.event).toBe("gateway_mqtt_error");
-      // Let a second reconnect attempt (reconnectPeriod: 1000ms) land before
-      // asserting it was suppressed — this is real elapsed time by necessity
-      // (verifying a time-based rate limit), kept to the minimum needed.
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      expect(warnings().length).toBe(1); // suppressed: same error within the log interval
     } finally {
       await client.close();
     }

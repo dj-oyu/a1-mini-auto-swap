@@ -89,18 +89,41 @@ export class PrintfarmGateway implements Notifier {
   }
 }
 
+/** One-event-per-interval throttle. Pure + Clock-injectable so a rate limit can
+ *  be verified deterministically (FakeClock) instead of with wall-clock sleeps. */
+export class LogThrottle {
+  private lastAt = Number.NEGATIVE_INFINITY;
+  constructor(
+    private readonly clock: Clock,
+    private readonly intervalMs: number,
+  ) {}
+  /** True (and arms the interval) if enough time has elapsed since the last pass. */
+  allow(): boolean {
+    const now = this.clock.now();
+    if (now - this.lastAt >= this.intervalMs) {
+      this.lastAt = now;
+      return true;
+    }
+    return false;
+  }
+}
+
 /** Real MqttPublisher over the self-hosted Mosquitto broker. */
 export class MqttPublisherClient implements MqttPublisher {
   private readonly conn: MqttClient;
   // Rate-limit connection-error logging: without a Mosquitto broker present
   // (e.g. Windows dev boxes without a local broker), mqtt.js retries every
   // `reconnectPeriod` and would otherwise spam one warning per attempt forever.
-  private lastErrorLoggedAt = 0;
   private static readonly ERROR_LOG_INTERVAL_MS = 60_000;
+  private readonly errorLog: LogThrottle;
   private readonly log: Logger;
 
-  constructor(url: string, opts: { username?: string; password?: string; logger?: Logger } = {}) {
+  constructor(
+    url: string,
+    opts: { username?: string; password?: string; logger?: Logger; clock?: Clock } = {},
+  ) {
     this.log = opts.logger ?? moduleLogger("gateway");
+    this.errorLog = new LogThrottle(opts.clock ?? systemClock, MqttPublisherClient.ERROR_LOG_INTERVAL_MS);
     this.conn = mqtt.connect(url, {
       username: opts.username,
       password: opts.password,
@@ -109,9 +132,7 @@ export class MqttPublisherClient implements MqttPublisher {
     // mqtt.js emits 'error' on connection failures (e.g. ECONNREFUSED); without
     // a listener, Node treats it as an unhandled error and crashes the process.
     this.conn.on("error", (err) => {
-      const now = Date.now();
-      if (now - this.lastErrorLoggedAt >= MqttPublisherClient.ERROR_LOG_INTERVAL_MS) {
-        this.lastErrorLoggedAt = now;
+      if (this.errorLog.allow()) {
         this.log.warn("mqtt connection error", { event: "gateway_mqtt_error", url, err: err.message });
       }
     });
