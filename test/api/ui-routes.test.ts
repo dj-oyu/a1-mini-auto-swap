@@ -19,6 +19,11 @@ async function body(path = "/"): Promise<{ status: number; type: string | null; 
   return { status: res.status, type: res.headers.get("content-type"), text: await res.text() };
 }
 
+/** Fetch a served asset's text (client JS/CSS now live in public/vendor/). */
+async function asset(path: string): Promise<string> {
+  return await (await app.request(path)).text();
+}
+
 describe("GET / (dashboard SSR)", () => {
   test("serves an HTML document", async () => {
     const r = await body();
@@ -151,8 +156,9 @@ describe("GET / (dashboard SSR)", () => {
       const r = await body();
       expect(r.text).toContain(`data-retry="${id}"`);
       expect(r.text).toContain(`data-delete="${id}"`);
-      expect(r.text).toContain("/retry");
-      expect(r.text).toContain("method: 'DELETE'");
+      const js = await asset("/vendor/app.js");
+      expect(js).toContain("/retry");
+      expect(js).toContain("method: 'DELETE'");
     });
 
     test("a queued card offers 削除 but not リトライ", async () => {
@@ -171,7 +177,7 @@ describe("GET / (dashboard SSR)", () => {
       expect(r.text).toContain("中止");
       expect(r.text).not.toContain(`data-delete="${id}"`);
       expect(r.text).not.toContain(`data-retry="${id}"`);
-      expect(r.text).toContain("/abort"); // client wires the abort fetch
+      expect(await asset("/vendor/app.js")).toContain("/abort"); // client wires the abort fetch
     });
 
     test("a non-printing card offers no 中止", async () => {
@@ -194,7 +200,7 @@ describe("GET / (dashboard SSR)", () => {
       expect(r.text).toContain(`data-move-down="${q}"`);
       expect(r.text).not.toContain(`data-move-up="${printing}"`);
       expect(r.text).not.toContain(`data-move-up="${done}"`);
-      expect(r.text).toContain("/api/queue/reorder");
+      expect(await asset("/vendor/app.js")).toContain("/api/queue/reorder");
     });
   });
 
@@ -267,10 +273,10 @@ describe("GET / (dashboard SSR)", () => {
     });
 
     test("the client uploads to POST /api/queue then opens the confirm modal", async () => {
-      const r = await body();
-      expect(r.text).toContain("/api/queue?filename=");
-      expect(r.text).toContain("openConfirm");
-      expect(r.text).toContain("uploadFile");
+      const js = await asset("/vendor/app.js");
+      expect(js).toContain("/api/queue?filename=");
+      expect(js).toContain("openConfirm");
+      expect(js).toContain("uploadFile");
     });
   });
 
@@ -363,10 +369,10 @@ describe("GET / (dashboard SSR)", () => {
     });
 
     test("the page has a #modal mount and the confirm-submit client logic", async () => {
-      const r = await body();
-      expect(r.text).toContain('id="modal"');
-      expect(r.text).toContain("/filaments");
-      expect(r.text).toContain("ams_mapping");
+      expect((await body()).text).toContain('id="modal"'); // HTML mount
+      const js = await asset("/vendor/app.js");
+      expect(js).toContain("/filaments");
+      expect(js).toContain("ams_mapping");
     });
   });
 
@@ -403,42 +409,43 @@ describe("GET / (dashboard SSR)", () => {
     });
 
     test("the client script computes % and finish-time", async () => {
-      const r = await body();
-      expect(r.text).toContain("updatePrinting");
-      expect(r.text).toContain("toLocaleTimeString");
+      const js = await asset("/vendor/app.js");
+      expect(js).toContain("updatePrinting");
+      expect(js).toContain("toLocaleTimeString");
     });
 
     test("the header carries the job id and the client polls the live status", async () => {
       const id = repo.createJob({ filename: "live.3mf", estimated_seconds: 1200 });
       repo.updateStatus(id, "printing");
-      const r = await body();
-      expect(r.text).toContain(`data-job-id="${id}"`);
+      expect((await body()).text).toContain(`data-job-id="${id}"`); // HTML
       // client prefers measured ETA from /api/printer/status (remaining_min)
-      expect(r.text).toContain("/api/printer/status");
-      expect(r.text).toContain("remaining_min");
-      expect(r.text).toContain("実測");
+      const js = await asset("/vendor/app.js");
+      expect(js).toContain("/api/printer/status");
+      expect(js).toContain("remaining_min");
+      expect(js).toContain("実測");
     });
 
     test("the client consumes push-based SSE progress (no 10s polling loop)", async () => {
-      const r = await body();
-      expect(r.text).toContain("es.addEventListener('progress'");
+      const js = await asset("/vendor/app.js");
+      expect(js).toContain("es.addEventListener('progress'");
       // the old fixed 10s poll interval is gone (SSE-driven now)
-      expect(r.text).not.toContain("setInterval(pollStatus, 10000)");
+      expect(js).not.toContain("setInterval(pollStatus, 10000)");
     });
 
     test("build-plate low: a toast mount + a stocker_low SSE handler", async () => {
-      const r = await body();
-      expect(r.text).toContain('id="toast"');
-      expect(r.text).toContain("es.addEventListener('stocker_low'");
-      expect(r.text).toContain("showToast");
+      expect((await body()).text).toContain('id="toast"'); // HTML mount
+      const js = await asset("/vendor/app.js");
+      expect(js).toContain("es.addEventListener('stocker_low'");
+      expect(js).toContain("showToast");
     });
   });
 
   describe("live updates (MVP #3)", () => {
     test("the page subscribes to the SSE stream", async () => {
-      const r = await body();
-      expect(r.text).toContain("new EventSource('/events')");
-      expect(r.text).toContain("/ui/dashboard");
+      expect((await body()).text).toContain('src="/vendor/app.js"');
+      const js = await asset("/vendor/app.js");
+      expect(js).toContain("new EventSource('/events')");
+      expect(js).toContain("/ui/dashboard");
     });
 
     test("GET /ui/dashboard returns just the reactive fragment", async () => {

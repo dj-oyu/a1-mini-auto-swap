@@ -98,9 +98,11 @@ describe("projects page", () => {
       expect(html).toContain(`data-run-id="${run}"`);
       expect(html).toContain('data-run-est="4500"');
       expect(html).toContain("完了予定");
-      expect(html).toContain("完了予定 "); // client fills the clock in
-      // and the page ships the ETA client script
-      expect(html).toContain("/api/printer/status");
+      // the page ships the ETA client script, which polls the live status
+      expect(html).toContain('src="/vendor/projects.js"');
+      const js = await (await app.request("/vendor/projects.js")).text();
+      expect(js).toContain("/api/printer/status");
+      expect(js).toContain("完了予定");
     });
   });
 
