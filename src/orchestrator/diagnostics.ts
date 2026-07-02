@@ -201,6 +201,10 @@ async function checkFtps(cfg: Required<DiagnosticsOptions>): Promise<FtpsCheck> 
     });
     // Logged in. Now probe which data-channel protection the server grants.
     const { mode, detail } = await probeProt(client);
+    // Polite QUIT before close: the real A1 holds an abruptly-destroyed
+    // session's slot for ~1-2 min, blocking the next FTPS connection
+    // (実測 2026-07-02 — this is what wedged Stage 5 after running Stage 1-3).
+    await client.send("QUIT").catch(() => {});
     return { authOk: true, protMode: mode, protDetail: detail };
   } catch (e) {
     return {
