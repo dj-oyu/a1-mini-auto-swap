@@ -31,7 +31,7 @@ import { injectIntoThreemf } from "./injection/threemf.ts";
 import { buildEjectThreemf } from "./injection/eject-threemf.ts";
 import { systemClock, type Notifier } from "./core/ports.ts";
 import { parseAmsMapping } from "./core/ams-mapping.ts";
-import { cacheFileName, printArtifactName } from "./core/artifact.ts";
+import { cacheFileName, printArtifactName, printerUploadPath } from "./core/artifact.ts";
 
 // Orchestrator entrypoint (spec 3): wires every adapter from env config into the
 // running core loop, and serves the HTTP API. Thin — the assembly logic lives
@@ -145,7 +145,7 @@ async function startDryRun(): Promise<void> {
     throw new Error(`refusing dry-rehearsal: ${unsafe.length} unsafe line(s) (heater/E-axis, INV-DRY-01/02)`);
   }
   const bytes = packageGcodeThreemf(gcode);
-  await uploadBytes(printerFtps, bytes, DRY_REHEARSAL_ARTIFACT);
+  await uploadBytes(printerFtps, bytes, printerUploadPath(DRY_REHEARSAL_ARTIFACT));
   mqtt.publishProjectFile({
     param: "Metadata/plate_1.gcode",
     url: `ftp:///cache/${DRY_REHEARSAL_ARTIFACT}`,

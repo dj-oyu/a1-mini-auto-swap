@@ -17,3 +17,11 @@ export const jobSubtaskPrefix = (jobId: number): string => `job-${jobId}.`;
  *  DB job — the monitor must never attribute its FINISH to a queue row, which
  *  the job- prefix scheme above already guarantees. */
 export const EJECT_ARTIFACT_NAME = "eject.gcode.3mf";
+
+/** Full STOR path on the printer for an artifact. Uploads MUST target /cache/
+ *  — 実測 2026-07-02: a STOR to the SD root is silently swallowed by real A1
+ *  firmware (no 226 reply → control-socket timeout → abandoned sessions wedge
+ *  the FTPS server). LIST works anywhere, which is why diagnostics passed
+ *  while every upload hung. The stub sanitizes to basename, so it accepts
+ *  either form. Matches the MQTT url (`ftp:///cache/...`, spec 9). */
+export const printerUploadPath = (name: string): string => `/cache/${name}`;
