@@ -48,6 +48,10 @@ class RecordingRepo extends Repo {
  *  scenarios are deterministic. Records the ams_mapping of each start. */
 class StubDirectPrinter implements PrinterPort {
   readonly sentMappings: number[][] = [];
+  /** eject jobs sent (dispatcher.onFailed/abort) — INV-FAIL-01. */
+  ejects = 0;
+  /** alternate-slot resumes requested by the FilamentService — INV-RUNOUT-04/06. */
+  readonly resumes: Array<{ jobId: number; toSlot: number }> = [];
   constructor(
     private readonly printer: VirtualPrinter,
     private readonly amsMappingFor: (jobId: number) => number[],
@@ -66,10 +70,11 @@ class StubDirectPrinter implements PrinterPort {
     if (err) throw new Error(err);
   }
   async ejectAndReset(): Promise<void> {
+    this.ejects++;
     this.printer.stop();
   }
-  async resumeWithAlternateSlot(): Promise<void> {
-    // scenarios exercise runout via FilamentService/__control, not this path
+  async resumeWithAlternateSlot(jobId: number, toSlot: number): Promise<void> {
+    this.resumes.push({ jobId, toSlot });
   }
 }
 
@@ -104,6 +109,9 @@ export class StubSut implements Sut {
   private readonly notifier = new RecordingNotifier();
   private initialRemaining = 0;
   private completions = 0;
+  /** Tray snapshot at the moment each runout fired — the "from" side that
+   *  INV-RUNOUT-04/06 compare the switch target against. */
+  private readonly runouts: Array<{ jobId: number; slot: number; color: string; type: string }> = [];
 
   async setup(setup: Setup): Promise<void> {
     const trays: Tray[] = setup.ams.map((a) => ({
@@ -200,13 +208,22 @@ export class StubSut implements Sut {
     const amsSlot = path.match(/\/__control\/ams\/(\d+)/);
     if (amsSlot) {
       const slot = Number(amsSlot[1]);
+      const before = this.amsState.find((t) => t.slot === slot);
       this.applyAmsPatch(slot, b);
       this.printer.setAms(slot, b as never);
       // A slot emptied during a print => runout: the orchestrator (here, the
       // monitor stand-in) invokes the FilamentService (spec 14).
       if (b.remaining_g === 0) {
         const printing = this.repo.listByStatus("printing")[0];
-        if (printing) await this.filamentService.onRunout(printing.id, slot);
+        if (printing) {
+          this.runouts.push({
+            jobId: printing.id,
+            slot,
+            color: before?.color ?? "",
+            type: before?.type ?? "",
+          });
+          await this.filamentService.onRunout(printing.id, slot);
+        }
       }
     } else if (path.endsWith("/finish")) {
       this.printer.forceFinish();
@@ -321,17 +338,51 @@ export class StubSut implements Sut {
         return this.pendingExists("filament_runout")
           ? { ok: true }
           : { ok: false, detail: "no filament_runout pending" };
-      case "INV-RUNOUT-04":
-      case "INV-RUNOUT-06": {
-        // an auto-switch recorded a color substitution
-        return this.allJobs().some((j) => j.substituted_color != null)
-          ? { ok: true }
-          : { ok: false, detail: "no substitution recorded" };
+      case "INV-RUNOUT-04": {
+        // every auto-switch landed on a same-material-type slot (spec 14 Tier 2)
+        if (this.printerPort.resumes.length === 0)
+          return { ok: false, detail: "no alternate-slot switch occurred" };
+        for (const r of this.printerPort.resumes) {
+          const runout = [...this.runouts].reverse().find((e) => e.jobId === r.jobId);
+          const target = this.amsState.find((t) => t.slot === r.toSlot);
+          if (!runout || !target) return { ok: false, detail: `switch to slot ${r.toSlot} has no runout/target record` };
+          if (target.type !== runout.type)
+            return { ok: false, detail: `switched ${runout.type} -> ${target.type} (slot ${r.toSlot})` };
+        }
+        return { ok: true };
       }
-      case "INV-PROJECT-01":
-        return this.pendingExists("color_decision")
+      case "INV-RUNOUT-06": {
+        // substituted_slot/color recorded IFF the switch target's color differs
+        if (this.printerPort.resumes.length === 0)
+          return { ok: false, detail: "no alternate-slot switch occurred" };
+        for (const r of this.printerPort.resumes) {
+          const runout = [...this.runouts].reverse().find((e) => e.jobId === r.jobId);
+          const target = this.amsState.find((t) => t.slot === r.toSlot);
+          const job = this.repo.getJob(r.jobId);
+          if (!runout || !target || !job) return { ok: false, detail: `incomplete records for job ${r.jobId}` };
+          const colorDiffers = target.color !== runout.color;
+          const recorded = job.substituted_color != null;
+          if (colorDiffers && (!recorded || job.substituted_slot !== r.toSlot || job.substituted_color !== target.color))
+            return { ok: false, detail: `color差分あり(${runout.color}->${target.color})なのに記録が ${job.substituted_slot}/${job.substituted_color}` };
+          if (!colorDiffers && recorded)
+            return { ok: false, detail: `同色切替なのに substituted_color=${job.substituted_color} が記録された` };
+        }
+        return { ok: true };
+      }
+      case "INV-PROJECT-01": {
+        // strict: color_decision pending exists AND the same project's remaining
+        // plates are actually held (not printing; still queued)
+        const cd = this.repo
+          .getUnresolvedPendingActions()
+          .find((a) => a.type === "color_decision" && a.project_id != null);
+        if (!cd) return { ok: false, detail: "no color_decision pending" };
+        const rest = this.allJobs().filter((j) => j.project_id === cd.project_id && j.id !== cd.job_id);
+        const leaked = rest.find((j) => j.status === "printing");
+        if (leaked) return { ok: false, detail: `project job ${leaked.id} dispatched while color_decision unresolved` };
+        return rest.some((j) => j.status === "queued")
           ? { ok: true }
-          : { ok: false, detail: "no color_decision pending" };
+          : { ok: false, detail: "no same-project job held in 'queued'" };
+      }
       case "INV-PROJECT-02": {
         const finished = this.allJobs().find(
           (j) => j.status === "success" && j.substituted_color != null && j.project_id != null,
@@ -346,9 +397,13 @@ export class StubSut implements Sut {
       }
       case "INV-FAIL-01": {
         const failed = this.allJobs().some((j) => j.status === "failed");
-        return failed && this.pendingExists("retry_decision")
+        const ejected = this.printerPort.ejects > 0; // safe-eject job was actually sent
+        return failed && ejected && this.pendingExists("retry_decision")
           ? { ok: true }
-          : { ok: false, detail: `failed=${failed} retry_decision=${this.pendingExists("retry_decision")}` };
+          : {
+              ok: false,
+              detail: `failed=${failed} ejects=${this.printerPort.ejects} retry_decision=${this.pendingExists("retry_decision")}`,
+            };
       }
       case "INV-STOCKER-04": {
         const refill = this.repo

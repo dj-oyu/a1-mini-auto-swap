@@ -65,6 +65,7 @@ async function withServer(
   }
 }
 
+// INV-FTPS-01
 test("implicit FTPS: TLS handshake succeeds on the bound port (table row: port 990 implicit, TLS 1.2)", async () => {
   await withServer(async (port, client) => {
     const res = await client.connectImplicitTLS("127.0.0.1", port, { rejectUnauthorized: false });
@@ -73,6 +74,7 @@ test("implicit FTPS: TLS handshake succeeds on the bound port (table row: port 9
   });
 });
 
+// INV-FTPS-02
 test("USER bblp + correct access code authenticates (table row: PASS == LAN access code)", async () => {
   await withServer(async (port, client) => {
     await client.connectImplicitTLS("127.0.0.1", port, { rejectUnauthorized: false });
@@ -81,6 +83,7 @@ test("USER bblp + correct access code authenticates (table row: PASS == LAN acce
   });
 });
 
+// INV-FTPS-02
 test("USER bblp + wrong access code is rejected", async () => {
   await withServer(async (port, client) => {
     await client.connectImplicitTLS("127.0.0.1", port, { rejectUnauthorized: false });
@@ -102,6 +105,7 @@ test("USER bblp + wrong access code is rejected", async () => {
   });
 });
 
+// INV-FTPS-03
 test("STOR uploads a file into uploadDir, sanitized to its basename (table row: STOR)", async () => {
   await withServer(async (port, client, server) => {
     await client.access({
@@ -126,6 +130,7 @@ test("STOR uploads a file into uploadDir, sanitized to its basename (table row: 
   });
 });
 
+// INV-FTPS-04
 test("PROT P (private) is accepted (table row: 200 Protection level set to Private)", async () => {
   await withServer(async (port, client) => {
     await client.connectImplicitTLS("127.0.0.1", port, { rejectUnauthorized: false });
@@ -140,6 +145,7 @@ test("PROT P (private) is accepted (table row: 200 Protection level set to Priva
 // A1 mini firmware instead falls back to a *plaintext* data channel when
 // PROT P doesn't stick, so this stub must accept PROT C — the opposite of
 // bambuddy's behavior — and the resulting plaintext STOR must still work.
+// INV-FTPS-05
 test("PROT C (cleartext) is accepted as an A1 fallback, and the plaintext data channel works", async () => {
   await withServer(async (port, client, server) => {
     await client.connectImplicitTLS("127.0.0.1", port, { rejectUnauthorized: false });
@@ -158,6 +164,7 @@ test("PROT C (cleartext) is accepted as an A1 fallback, and the plaintext data c
   });
 });
 
+// INV-FTPS-06
 test("large STOR (>64KiB, exercises chunked writes) uploads intact (table row: 64KiB chunks, 4GiB cap)", async () => {
   await withServer(async (port, client, server) => {
     await client.access({

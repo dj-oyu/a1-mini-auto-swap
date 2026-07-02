@@ -84,6 +84,9 @@ describe("Dispatcher — abort (spec 8/19)", () => {
 
     const ok = await dispatcher.abort(a);
     expect(ok).toBe(true);
+    // INV-MQTT-02 (indirect, core-layer equivalent): abort issues the eject/reset sequence
+    // before the mechanism is considered safe again; the MQTT stop->eject-job ordering itself
+    // is verified at the orchestrator layer, not here.
     expect(printer.ejects).toBe(1); // mechanism reset
     expect(dbh.repo.getJob(a)!.status).toBe("aborted");
     expect(dbh.repo.getStocker()!.remaining).toBe(9); // forced eject swap (-1)
@@ -143,6 +146,8 @@ describe("Dispatcher — stocker empty (INV-STOCKER-04)", () => {
     const out = await dispatcher.dispatchNext();
     expect(out).toEqual({ dispatched: null, reason: "stocker_empty" });
     expect(printingCount()).toBe(0);
+    // INV-DISPATCH-04: stocker-check fails => no FTPS upload / print_start reaches the printer port
+    expect(printer.started).toHaveLength(0);
     const pending = dbh.repo.getUnresolvedPendingActions();
     expect(pending).toHaveLength(1);
     expect(pending[0]!.type).toBe("stocker_refill");
@@ -160,6 +165,8 @@ describe("Dispatcher — stocker empty (INV-STOCKER-04)", () => {
     await dispatcher.dispatchNext();
     await dispatcher.dispatchNext();
     expect(dbh.repo.getUnresolvedPendingActions()).toHaveLength(1);
+    // INV-DISPATCH-04: repeated attempts while stocker is empty must never call startPrint
+    expect(printer.started).toHaveLength(0);
   });
 });
 
@@ -174,6 +181,9 @@ describe("Dispatcher — project blocking (INV-DISPATCH-01)", () => {
     const out = await dispatcher.dispatchNext();
     expect(out).toEqual({ dispatched: b1 }); // skipped a1, ran b1
     expect(dbh.repo.getJob(a1)!.status).toBe("queued"); // still waiting
+    // INV-DISPATCH-04: project-block-check fails for a1 => startPrint is never called for it,
+    // even though it sorts before b1 (INV-DISPATCH-02 position order would otherwise pick it first)
+    expect(printer.started).toEqual([b1]);
   });
 });
 
@@ -196,7 +206,9 @@ describe("Dispatcher — failure & retry (INV-FAIL-01 / INV-QUEUE-02/03)", () =>
     expect(job.status).toBe("failed");
     expect(job.attempts).toBe(1);
     expect(printer.ejects).toBe(1);
-    expect(dbh.repo.getStocker()!.remaining).toBe(9); // forced-eject swap
+    // INV-FAIL-02: onFailed still consumes a stocker plate (forced-eject swap), so a swap-system
+    // fault surfaces as a stocker/consumption discrepancy instead of being silently lost
+    expect(dbh.repo.getStocker()!.remaining).toBe(9);
     expect(dbh.repo.getUnresolvedPendingActions().some((a) => a.type === "retry_decision")).toBe(true);
 
     // failed job is NOT re-dispatched automatically
@@ -209,6 +221,7 @@ describe("Dispatcher — failure & retry (INV-FAIL-01 / INV-QUEUE-02/03)", () =>
     // simulate 4 prior attempts (> retryLimit 3)
     for (let i = 0; i < 4; i++) dbh.repo.incrementAttempts(id);
     dbh.repo.updateStatus(id, "failed");
+    // INV-QUEUE-03: attempts > retryLimit => queue halts for this job, notify-only, no auto re-dispatch
     expect(await dispatcher.retry(id)).toBe(false);
     expect(dbh.repo.getJob(id)!.status).toBe("failed");
     expect(dbh.repo.getUnresolvedPendingActions().some((a) => a.type === "mechanical_check")).toBe(true);
