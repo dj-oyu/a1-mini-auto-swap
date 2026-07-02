@@ -111,6 +111,15 @@ export class Repo implements QueueStore {
         id,
       );
   }
+  // spec ch8: reorder the queue (PATCH /api/queue/reorder). Assigns position by
+  // the given id order (1..N) in one transaction. Ids not listed keep their old
+  // position (callers pass the full display order to avoid ties).
+  reorderJobs(ids: number[]): void {
+    const set = this.db.query("UPDATE jobs SET position=?, updated_at=datetime('now') WHERE id=?");
+    this.db.transaction(() => {
+      ids.forEach((id, i) => set.run(i + 1, id));
+    })();
+  }
   // spec ch8: assign/unassign a job to a project (confirm-step, so a plate joins
   // a project's sequential build). null clears the assignment.
   setProject(id: number, projectId: number | null): void {

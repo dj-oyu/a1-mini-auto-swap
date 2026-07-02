@@ -236,11 +236,19 @@ function jobCard(job: JobRow): Html {
   `;
 }
 
-/** Per-card management actions (spec 17): retry a failed job, delete any
- *  non-printing job. Both are client fetch + #dashboard refresh (see
- *  LIVE_SCRIPT). Delete is a two-step ("本当に削除？") — no native dialog. */
+/** Statuses whose dispatch order can still be changed by reordering. */
+const REORDERABLE: JobStatus[] = ["queued", "processing", "waiting_for_refill"];
+
+/** Per-card management actions (spec 17): reorder (↑/↓) the upcoming plates,
+ *  retry a failed job, abort the running one, delete any non-printing job.
+ *  All are client fetch + #dashboard refresh (see LIVE_SCRIPT). Abort/delete
+ *  are two-step ("本当に…？") — no native dialog. */
 function cardActions(job: JobRow): Html {
   const buttons: Html[] = [];
+  if (REORDERABLE.includes(job.status)) {
+    buttons.push(html`<button class="act move" data-move-up="${job.id}" title="上へ" aria-label="上へ">↑</button>`);
+    buttons.push(html`<button class="act move" data-move-down="${job.id}" title="下へ" aria-label="下へ">↓</button>`);
+  }
   if (job.status === "printing") {
     buttons.push(html`<button class="act danger" data-abort="${job.id}">中止</button>`);
   }
@@ -653,6 +661,26 @@ const LIVE_SCRIPT = `
     document.body.addEventListener('click', function (e) {
       if (e.target.hasAttribute && e.target.hasAttribute('data-close')) { closeModal(); return; }
 
+      // card action: reorder (↑/↓) — swap with the adjacent card, persist order
+      var up = e.target.closest && e.target.closest('[data-move-up]');
+      var down = e.target.closest && e.target.closest('[data-move-down]');
+      if (up || down) {
+        var moveId = Number((up || down).getAttribute(up ? 'data-move-up' : 'data-move-down'));
+        var cards = Array.prototype.slice.call(document.querySelectorAll('.queue .card[data-job-id]'));
+        var order = cards.map(function (c) { return Number(c.getAttribute('data-job-id')); });
+        var i = order.indexOf(moveId);
+        var j = up ? i - 1 : i + 1;
+        if (i < 0 || j < 0 || j >= order.length) return; // at a boundary
+        order[i] = order[j];
+        order[j] = moveId;
+        fetch('/api/queue/reorder', {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ order: order }),
+        }).then(function (r) { if (r.ok) refresh(); });
+        return;
+      }
+
       // card action: abort the running job (two-step, no native dialog)
       var abortBtn = e.target.closest && e.target.closest('[data-abort]');
       if (abortBtn) {
@@ -838,6 +866,7 @@ const STYLES = `
   .act{font:inherit;font-size:13px;padding:5px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);cursor:pointer}
   .act:hover{background:#f3f4f6}
   .card-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}
+  .act.move{padding:5px 10px;font-weight:700;line-height:1}
   .act.danger{border-color:var(--red);color:var(--red)}
   .act.danger:hover{background:#fdeaea}
   .act.primary{background:var(--blue);border-color:var(--blue);color:#fff}
