@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { extractFilaments } from "../injection/threemf.ts";
+import { cacheFileName } from "../core/artifact.ts";
 import type { Repo } from "../db/repo.ts";
 
 /**
@@ -34,7 +35,7 @@ export function createUploadApp(deps: { repo: Repo; cacheDir: string }): Hono {
     const id = repo.createJob({ filename, filaments });
 
     mkdirSync(cacheDir, { recursive: true });
-    writeFileSync(join(cacheDir, `${id}.gcode.3mf`), buf);
+    writeFileSync(join(cacheDir, cacheFileName(id)), buf);
 
     return c.json({ id, filaments }, 201);
   });

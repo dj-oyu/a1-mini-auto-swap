@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { html, raw } from "hono/html";
 import { getCookie, setCookie } from "hono/cookie";
 import type { MiddlewareHandler } from "hono";
+import { timingSafeEqual } from "node:crypto";
 
 /**
  * Minimal fixed-token auth (spec 17: "認証：最低限の固定トークン"). Opt-in — main()
@@ -17,12 +18,14 @@ import type { MiddlewareHandler } from "hono";
 const COOKIE = "pf_token";
 const cookieOpts = { httpOnly: true, sameSite: "Lax", path: "/" } as const;
 
-/** Constant-time-ish string compare (avoid trivial timing leaks on the token). */
+/** Constant-time token compare (node:crypto). Length still short-circuits —
+ *  timingSafeEqual requires equal-length buffers; leaking the length is the
+ *  standard accepted trade-off. */
 function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
+  const ba = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  if (ba.length !== bb.length) return false;
+  return timingSafeEqual(ba, bb);
 }
 
 function presentedToken(c: Parameters<MiddlewareHandler>[0]): string | undefined {

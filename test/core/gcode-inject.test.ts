@@ -2,11 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   MACHINE_START_MARKER,
-  gcodeMd5,
   injectEndSequence,
   injectStartSequence,
   resolvePlaceholders,
 } from "../../src/core/gcode-inject.ts";
+import { gcodeMd5 } from "../../src/injection/md5.ts";
 
 const SWAP = "G1 Z180 F3000\nM400";
 

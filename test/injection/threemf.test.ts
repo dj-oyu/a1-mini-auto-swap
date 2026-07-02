@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { extractFilaments, injectIntoThreemf } from "../../src/injection/threemf.ts";
-import { gcodeMd5 } from "../../src/core/gcode-inject.ts";
+import { gcodeMd5 } from "../../src/injection/md5.ts";
 
 const PLATE_GCODE = [
   "; HEADER_BLOCK_START",

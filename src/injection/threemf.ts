@@ -1,5 +1,6 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
-import { gcodeMd5, injectEndSequence, resolvePlaceholders } from "../core/gcode-inject.ts";
+import { injectEndSequence, resolvePlaceholders } from "../core/gcode-inject.ts";
+import { gcodeMd5 } from "./md5.ts";
 
 // .gcode.3mf processing (spec 5/7): a ZIP archive. We inject the swap/end
 // sequence into a plate's G-code, recompute its .md5 sidecar, and repackage —
