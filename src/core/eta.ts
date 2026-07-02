@@ -42,3 +42,20 @@ export function calcEta(inp: EtaInputs): EtaResult {
 
   return { projectEta: cursor, plateEtas };
 }
+
+/** Rough per-swap overhead (seconds) between plates for project-level ETA
+ *  aggregation (spec 10). Real SWAP_DURATION_MS calibration is a spec 19 open
+ *  item; until measured this stays a coarse constant. */
+export const SWAP_SEC = 60;
+
+/**
+ * Aggregate remaining seconds for a project's still-to-finish plates (spec 10):
+ * sum of static slice estimates + one swap per plate boundary. Pure/no-clock —
+ * the client turns it into a completion time and (for the running plate) swaps
+ * in the live mc_remaining_time.
+ */
+export function projectRemainingSec(activeJobs: Array<{ estimated_seconds: number | null }>): number {
+  if (activeJobs.length === 0) return 0;
+  const est = activeJobs.reduce((s, j) => s + (j.estimated_seconds ?? 0), 0);
+  return est + (activeJobs.length - 1) * SWAP_SEC;
+}

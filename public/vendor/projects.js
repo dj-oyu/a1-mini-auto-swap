@@ -1,8 +1,5 @@
   (function () {
-    function fmtClock(epoch) {
-      try { return new Date(epoch).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
-      catch (e) { return '--:--'; }
-    }
+    var fmtClock = window.PF.fmtClock;
     var live = null;
     function render() {
       document.querySelectorAll('.proj-card[data-eta-sec]').forEach(function (card) {
@@ -21,10 +18,7 @@
       });
     }
     function poll() {
-      fetch('/api/printer/status')
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (s) { live = s; render(); })
-        .catch(render);
+      window.PF.fetchPrinterStatus(function (s) { live = s; render(); });
     }
     poll();
     setInterval(poll, 30000);

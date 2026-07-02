@@ -3,10 +3,7 @@
     // mc_remaining_time (polled from /api/printer/status), falling back to the
     // static estimate (data-start/data-est) when no live value is available.
     var liveStatus = null;
-    function fmtClock(epoch) {
-      try { return new Date(epoch).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
-      catch (e) { return '--:--'; }
-    }
+    var fmtClock = window.PF.fmtClock;
     function updatePrinting() {
       var els = document.querySelectorAll('[data-printing]');
       for (var i = 0; i < els.length; i++) {
@@ -35,17 +32,21 @@
       }
     }
     function pollStatus() {
-      fetch('/api/printer/status')
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (s) { liveStatus = s; updatePrinting(); })
-        .catch(function () { updatePrinting(); });
+      window.PF.fetchPrinterStatus(function (s) { liveStatus = s; updatePrinting(); });
     }
 
     pollStatus(); // initial populate; live updates then arrive via SSE 'progress'
     document.body.addEventListener('htmx:afterSwap', updatePrinting);
 
+    // Coalesced #dashboard refresh: a mutation's own .then(refresh) and the SSE
+    // event it triggers (or a finish's job_finished+job_started+pending burst)
+    // collapse into ONE fragment fetch instead of two or three.
+    var refreshTimer = null;
     function refresh() {
-      if (window.htmx) window.htmx.ajax('GET', '/ui/dashboard', { target: '#dashboard', swap: 'outerHTML' });
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(function () {
+        if (window.htmx) window.htmx.ajax('GET', '/ui/dashboard', { target: '#dashboard', swap: 'outerHTML' });
+      }, 150);
     }
     function closeModal() { var m = document.getElementById('modal'); if (m) m.innerHTML = ''; }
     // Transient alert (e.g. build-plate low). Click or auto-hide after ~12s.
@@ -163,6 +164,21 @@
         if (r.ok) { closeModal(); refresh(); }
         else { box.classList.add('error'); }
       }).catch(function () { btn.disabled = false; box.classList.add('error'); });
+    });
+
+    // spec 17 §9: changing a slot's AMS tray in the confirm modal recolors the
+    // 3D preview immediately via viewer.js's __setColor hook — the visual
+    // "this is what will actually print" check. 未使用 (-1) greys the model out.
+    document.body.addEventListener('change', function (e) {
+      var sel = e.target;
+      if (!sel || !sel.matches || !sel.matches('.modal-box select[data-slot]')) return;
+      var box = sel.closest('.modal-box');
+      var viewer = box && box.querySelector('.viewer');
+      if (!viewer || typeof viewer.__setColor !== 'function') return;
+      if (Number(sel.value) < 0) { viewer.__setColor('#cccccc'); return; }
+      var row = sel.closest('.fil-row');
+      var hex = row && row.getAttribute('data-color');
+      if (hex && /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(hex)) viewer.__setColor(hex);
     });
 
     // MVP #5: drag-drop / pick a .gcode.3mf → POST /api/queue → open its confirm

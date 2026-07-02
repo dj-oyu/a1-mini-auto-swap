@@ -2,7 +2,12 @@ import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import { html, raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
+import { projectRemainingSec } from "../core/eta.ts";
 import type { Repo } from "../db/repo.ts";
+
+// Re-exported for existing consumers/tests; the ETA aggregation rule itself
+// lives in core (spec 10) — presentation only renders it.
+export { projectRemainingSec };
 import type {
   ColorConsistencyPolicy,
   JobRow,
@@ -375,7 +380,7 @@ function renderConfirmPanel(job: JobRow | null, projects: ProjectRow[] = []): Ht
               }</option>`,
           );
           return html`
-            <div class="fil-row">
+            <div class="fil-row" data-color="${f.color}">
               ${swatchDot(f.color)}
               <span class="fil-slot">スロット ${f.slot}</span>
               <select data-slot="${f.slot}">${opts}</select>
@@ -510,19 +515,6 @@ const POLICY_LABEL: Record<ColorConsistencyPolicy, string> = {
 
 const ACTIVE_STATUSES: JobStatus[] = ["processing", "queued", "printing", "waiting_for_refill"];
 
-/** Rough per-swap overhead added between plates when aggregating a project ETA. */
-const SWAP_SEC = 60;
-
-/** Aggregate remaining seconds for a project's still-to-finish plates (spec 10):
- *  sum of static slice estimates + one swap per plate boundary. Pure/no-clock —
- *  the client turns it into a completion time and (for the running plate) swaps
- *  in the live mc_remaining_time. */
-export function projectRemainingSec(activeJobs: Array<{ estimated_seconds: number | null }>): number {
-  if (activeJobs.length === 0) return 0;
-  const est = activeJobs.reduce((s, j) => s + (j.estimated_seconds ?? 0), 0);
-  return est + (activeJobs.length - 1) * SWAP_SEC;
-}
-
 /** Top navigation shared by the dashboard and the projects page. */
 function nav(active: "queue" | "projects"): Html {
   const cls = (k: string) => (k === active ? "navlink active" : "navlink");
@@ -606,6 +598,7 @@ function renderProjectsPage(repo: Repo): Html {
 <body>
   <header class="topbar"><h1>プロジェクト</h1>${nav("projects")}</header>
   <main>${renderProjectsInner(repo)}</main>
+  <script src="/vendor/shared.js" defer></script>
   <script src="/vendor/projects.js" defer></script>
 </body>
 </html>`;
@@ -639,6 +632,7 @@ function renderDashboard(data: DashboardData): Html {
   ${renderDashboardInner(data)}
   <div id="modal"></div>
   <div id="toast" class="toast" hidden></div>
+  <script src="/vendor/shared.js" defer></script>
   <script src="/vendor/app.js" defer></script>
 </body>
 </html>`;
