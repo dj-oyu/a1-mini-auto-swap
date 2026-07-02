@@ -1,31 +1,35 @@
 import { readFileSync } from "node:fs";
-import { withFtpsRetry, type FtpsRetryOptions } from "./ftps-session.ts";
-import { uploadPlainData, type UploadProgress } from "./ftps-transfer.ts";
+import { uploadViaCurl } from "./ftps-curl.ts";
+import type { UploadProgressSample } from "./upload-progress-throttle.ts";
 
-// Printer FTPS uploads (spec 2/6). Session lifecycle (serialization, QUIT,
-// transient retry) lives in ftps-session.ts; the actual transfer runs over an
-// in-process PROT C plaintext data channel (ftps-transfer.ts) because Bun's
-// TLSSocket cannot send close_notify and real A1 firmware silently discards a
-// PROT P upload closed without one (実測 2026-07-02). Single-process by
-// design: the transfer engine exposes onProgress now, pause/abort/resume
-// attach at the same layer later.
+// Printer FTPS uploads (spec 2/6). The transfer runs through the system curl
+// binary (ftps-curl.ts) — the only client proven to complete a STOR against
+// real A1 firmware, which requires a TLS data channel finalized with a proper
+// close_notify that Bun's TLS cannot emit (実測 2026-07-02). curl uploads are
+// serialized against all other printer FTPS activity (single session slot) and
+// expose the same onProgress hook, so the SSE indicator and future
+// abort/resume attach unchanged.
 
-export interface FtpsUploadOptions extends FtpsRetryOptions {
-  /** Transfer monitor hook, forwarded to the data engine. */
-  onProgress?: (p: UploadProgress) => void;
+export interface FtpsUploadOptions {
+  host: string;
+  port: number;
+  accessCode: string;
+  username?: string;
+  /** Transfer monitor hook (bytesSent/totalBytes), forwarded to the engine. */
+  onProgress?: (p: UploadProgressSample) => void;
+  /** Overall transfer deadline. */
+  timeoutMs?: number;
+  /** Abort the in-flight upload. */
+  signal?: AbortSignal;
 }
 
-/**
- * Upload a local file to the printer's cache. One session per attempt:
- * connect (TLS control) → PROT C → PASV → plain STOR → QUIT.
- */
+/** Upload a local file to the printer's cache. */
 export async function uploadFile(
   opts: FtpsUploadOptions,
   localPath: string,
   remoteName: string,
 ): Promise<void> {
-  const data = readFileSync(localPath);
-  await uploadBytes(opts, data, remoteName);
+  await uploadBytes(opts, readFileSync(localPath), remoteName);
 }
 
 /** Upload in-memory bytes (used when the artifact is generated, not on disk). */
@@ -34,5 +38,13 @@ export async function uploadBytes(
   data: Buffer,
   remoteName: string,
 ): Promise<void> {
-  await withFtpsRetry(opts, (c) => uploadPlainData(c, data, remoteName, { onProgress: opts.onProgress }));
+  await uploadViaCurl(data, remoteName, {
+    host: opts.host,
+    port: opts.port,
+    accessCode: opts.accessCode,
+    username: opts.username,
+    onProgress: opts.onProgress,
+    timeoutMs: opts.timeoutMs,
+    signal: opts.signal,
+  });
 }
