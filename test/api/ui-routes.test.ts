@@ -202,6 +202,20 @@ describe("GET / (dashboard SSR)", () => {
       expect(r.text).not.toContain(`data-move-up="${done}"`);
       expect(await asset("/vendor/app.js")).toContain("/api/queue/reorder");
     });
+
+    test("reorderable cards get a drag handle; the client wires pointer sortable", async () => {
+      const q = repo.createJob({ filename: "q.3mf" });
+      repo.updateStatus(q, "queued");
+      const done = repo.createJob({ filename: "d.3mf" });
+      repo.updateStatus(done, "success");
+      const r = await body();
+      expect(r.text).toContain("data-drag-handle");
+      // terminal card has no handle (only one handle → for the queued job)
+      expect((r.text.match(/data-drag-handle/g) || []).length).toBe(1);
+      const js = await asset("/vendor/app.js");
+      expect(js).toContain("pointerdown");
+      expect(js).toContain("data-drag-handle");
+    });
   });
 
   describe("thumbnails (MVP #6)", () => {

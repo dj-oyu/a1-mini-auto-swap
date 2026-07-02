@@ -250,6 +250,7 @@ const REORDERABLE: JobStatus[] = ["queued", "processing", "waiting_for_refill"];
 function cardActions(job: JobRow): Html {
   const buttons: Html[] = [];
   if (REORDERABLE.includes(job.status)) {
+    buttons.push(html`<span class="drag-handle act move" data-drag-handle title="ドラッグで並び替え" aria-hidden="true">⠿</span>`);
     buttons.push(html`<button class="act move" data-move-up="${job.id}" title="上へ" aria-label="上へ">↑</button>`);
     buttons.push(html`<button class="act move" data-move-down="${job.id}" title="下へ" aria-label="下へ">↓</button>`);
   }

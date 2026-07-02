@@ -210,6 +210,42 @@
       });
     }
 
+    // Drag-and-drop reorder (pointer-based → testable; ↑/↓ buttons remain as an
+    // accessible fallback). On drop, persist the new order via PATCH.
+    function queueCards() {
+      return Array.prototype.slice.call(document.querySelectorAll('.queue .card[data-job-id]'));
+    }
+    var dragEl = null;
+    document.body.addEventListener('pointerdown', function (e) {
+      var h = e.target.closest && e.target.closest('[data-drag-handle]');
+      if (!h) return;
+      dragEl = h.closest('.card');
+      if (!dragEl) return;
+      dragEl.classList.add('dragging');
+      e.preventDefault();
+      document.addEventListener('pointerup', dropOnce, { once: true });
+    });
+    function dropOnce(e) {
+      if (!dragEl) return;
+      var moved = dragEl;
+      moved.classList.remove('dragging');
+      var others = queueCards().filter(function (c) { return c !== moved; });
+      var before = null;
+      for (var i = 0; i < others.length; i++) {
+        var r = others[i].getBoundingClientRect();
+        if (e.clientY < r.top + r.height / 2) { before = others[i]; break; }
+      }
+      var list = moved.parentNode;
+      if (before) list.insertBefore(moved, before); else list.appendChild(moved);
+      dragEl = null;
+      var order = queueCards().map(function (c) { return Number(c.getAttribute('data-job-id')); });
+      fetch('/api/queue/reorder', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ order: order }),
+      }).then(function (r) { if (r.ok) refresh(); });
+    }
+
     if (!window.EventSource) {
       setInterval(pollStatus, 15000); // no SSE → fall back to polling the header
       return;
