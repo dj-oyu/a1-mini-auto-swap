@@ -38,6 +38,22 @@
     pollStatus(); // initial populate; live updates then arrive via SSE 'progress'
     document.body.addEventListener('htmx:afterSwap', updatePrinting);
 
+    // Delegated <img onerror> replacement (CSP-friendly: no inline handlers).
+    // 'error' doesn't bubble, so this listens on the CAPTURE phase from a
+    // stable ancestor instead — data-onerror on the element picks the recovery.
+    document.body.addEventListener('error', function (e) {
+      var el = e.target;
+      if (!el || !el.getAttribute) return;
+      var kind = el.getAttribute('data-onerror');
+      if (kind === 'remove') {
+        el.remove();
+      } else if (kind === 'snapshot') {
+        el.hidden = true;
+        var none = el.parentNode && el.parentNode.querySelector('.snapshot-none');
+        if (none) none.hidden = false;
+      }
+    }, true);
+
     // Coalesced #dashboard refresh: a mutation's own .then(refresh) and the SSE
     // event it triggers (or a finish's job_finished+job_started+pending burst)
     // collapse into ONE fragment fetch instead of two or three.
@@ -48,7 +64,61 @@
         if (window.htmx) window.htmx.ajax('GET', '/ui/dashboard', { target: '#dashboard', swap: 'outerHTML' });
       }, 150);
     }
-    function closeModal() { var m = document.getElementById('modal'); if (m) m.innerHTML = ''; }
+    // Modal accessibility (a11y polish): Escape closes, Tab traps focus inside
+    // the modal-box, and focus moves in on open / back out on close. The
+    // modal-box itself is marked role="dialog" aria-modal="true" server-side
+    // (ui-routes.ts); this is the client half of that contract.
+    function focusableIn(box) {
+      return Array.prototype.slice.call(
+        box.querySelectorAll(
+          'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
+        )
+      );
+    }
+    var modalOpenerEl = null; // element focused just before the modal opened
+    function onModalOpened() {
+      var modal = document.getElementById('modal');
+      var box = modal && modal.querySelector('.modal-box');
+      if (!box) return;
+      modalOpenerEl = document.activeElement;
+      var f = focusableIn(box);
+      (f[0] || box).focus();
+    }
+    function closeModal() {
+      var m = document.getElementById('modal');
+      if (m) m.innerHTML = '';
+      if (modalOpenerEl && typeof modalOpenerEl.focus === 'function') modalOpenerEl.focus();
+      modalOpenerEl = null;
+    }
+    // htmx swaps the modal in for every open path (hx-get on the card-thumb /
+    // camera button / confirm button, and the upload flow's openConfirm() via
+    // htmx.ajax) — one listener covers all of them.
+    document.body.addEventListener('htmx:afterSwap', function (e) {
+      var tgt = e.detail && e.detail.target;
+      if (tgt && tgt.id === 'modal') onModalOpened();
+    });
+    document.addEventListener('keydown', function (e) {
+      var modal = document.getElementById('modal');
+      var box = modal && modal.querySelector('.modal-box');
+      if (!box) return;
+      if (e.key === 'Escape' || e.keyCode === 27) {
+        closeModal();
+        return;
+      }
+      if (e.key !== 'Tab' && e.keyCode !== 9) return;
+      var f = focusableIn(box);
+      if (f.length === 0) { e.preventDefault(); box.focus(); return; }
+      var first = f[0], last = f[f.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first || !box.contains(document.activeElement)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (document.activeElement === last || !box.contains(document.activeElement)) {
+        e.preventDefault();
+        first.focus();
+      }
+    });
     // Transient alert (e.g. build-plate low). Click or auto-hide after ~12s.
     function showToast(msg) {
       var t = document.getElementById('toast');
@@ -79,18 +149,13 @@
       var down = e.target.closest && e.target.closest('[data-move-down]');
       if (up || down) {
         var moveId = Number((up || down).getAttribute(up ? 'data-move-up' : 'data-move-down'));
-        var cards = Array.prototype.slice.call(document.querySelectorAll('.queue .card[data-job-id]'));
-        var order = cards.map(function (c) { return Number(c.getAttribute('data-job-id')); });
+        var order = queueCards().map(function (c) { return Number(c.getAttribute('data-job-id')); });
         var i = order.indexOf(moveId);
         var j = up ? i - 1 : i + 1;
         if (i < 0 || j < 0 || j >= order.length) return; // at a boundary
         order[i] = order[j];
         order[j] = moveId;
-        fetch('/api/queue/reorder', {
-          method: 'PATCH',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ order: order }),
-        }).then(function (r) { if (r.ok) refresh(); });
+        persistOrder(order);
         return;
       }
 
@@ -231,6 +296,15 @@
     function queueCards() {
       return Array.prototype.slice.call(document.querySelectorAll('.queue .card[data-job-id]'));
     }
+    // Shared by the ↑/↓ buttons and the drag-drop handler below: both end up
+    // with a full job-id order array, then persist + refresh identically.
+    function persistOrder(order) {
+      fetch('/api/queue/reorder', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ order: order }),
+      }).then(function (r) { if (r.ok) refresh(); });
+    }
     var dragEl = null;
     document.body.addEventListener('pointerdown', function (e) {
       var h = e.target.closest && e.target.closest('[data-drag-handle]');
@@ -255,11 +329,7 @@
       if (before) list.insertBefore(moved, before); else list.appendChild(moved);
       dragEl = null;
       var order = queueCards().map(function (c) { return Number(c.getAttribute('data-job-id')); });
-      fetch('/api/queue/reorder', {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ order: order }),
-      }).then(function (r) { if (r.ok) refresh(); });
+      persistOrder(order);
     }
 
     if (!window.EventSource) {

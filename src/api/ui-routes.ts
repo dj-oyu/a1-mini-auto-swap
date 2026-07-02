@@ -222,7 +222,7 @@ function jobCard(job: JobRow): Html {
   const substituted = job.substituted_color != null;
   return html`
     <li class="card status-${meta.cls}" data-job-id="${job.id}">
-      <img class="card-thumb" src="/api/queue/${job.id}/thumbnail" alt="3Dプレビューを開く" title="3Dプレビュー" loading="lazy" onerror="this.remove()" hx-get="/ui/queue/${job.id}/preview" hx-target="#modal" hx-swap="innerHTML" />
+      <img class="card-thumb" src="/api/queue/${job.id}/thumbnail" alt="3Dプレビューを開く" title="3Dプレビュー" loading="lazy" data-onerror="remove" hx-get="/ui/queue/${job.id}/preview" hx-target="#modal" hx-swap="innerHTML" />
       <div class="card-main">
         <div class="card-title">
           <span class="badge ${meta.cls}">${meta.label}</span>
@@ -272,18 +272,25 @@ function cardActions(job: JobRow): Html {
   return html`<div class="card-actions">${buttons}</div>`;
 }
 
+/** Common accessibility attributes for every .modal-box (a11y polish slice):
+ *  an ARIA dialog role so assistive tech announces it as a modal, plus a
+ *  tabindex so app.js can focus the box itself when it has no focusable
+ *  children. Kept as one constant so all six modal-box call sites stay in sync. */
+const MODAL_BOX_A11Y = raw(' role="dialog" aria-modal="true" tabindex="-1"');
+
 /** Camera snapshot modal (spec 17 §5). The img 404s gracefully to a message
- *  when no frame is available; 更新 reloads it with a cache-buster. */
+ *  when no frame is available (via app.js's delegated error handler,
+ *  data-onerror="snapshot"); 更新 reloads it with a cache-buster. */
 function renderSnapshotPanel(): Html {
   return html`
     <div class="modal-overlay" data-close>
-      <div class="modal-box">
+      <div class="modal-box"${MODAL_BOX_A11Y}>
         <h2 class="modal-title">カメラ</h2>
         <img
           class="snapshot"
           src="/api/printer/snapshot"
           alt="printer camera"
-          onerror="this.hidden=true;var m=this.parentNode.querySelector('.snapshot-none');if(m)m.hidden=false;"
+          data-onerror="snapshot"
         />
         <p class="muted snapshot-none" hidden>スナップショットがありません</p>
         <div class="modal-actions">
@@ -298,12 +305,12 @@ function renderSnapshotPanel(): Html {
 /** Read-only 3D preview modal for any job (spec 17 §9). */
 function renderPreviewPanel(job: JobRow | null): Html {
   if (!job) {
-    return html`<div class="modal-overlay" data-close><div class="modal-box">ジョブが見つかりません。<div class="modal-actions"><button class="act" data-close>閉じる</button></div></div></div>`;
+    return html`<div class="modal-overlay" data-close><div class="modal-box"${MODAL_BOX_A11Y}>ジョブが見つかりません。<div class="modal-actions"><button class="act" data-close>閉じる</button></div></div></div>`;
   }
   const filaments = parseFilaments(job.filaments);
   return html`
     <div class="modal-overlay" data-close>
-      <div class="modal-box">
+      <div class="modal-box"${MODAL_BOX_A11Y}>
         <h2 class="modal-title">3D プレビュー</h2>
         <p class="muted">${job.filename}</p>
         ${renderViewer(job.id, filaments[0]?.color)}
@@ -336,7 +343,7 @@ function renderViewer(jobId: number, colorHex?: string): Html {
   const color = colorHex && safeHex(colorHex) ? colorHex : "#4b9fea";
   return html`
     <div class="viewer" data-model-url="/api/queue/${jobId}/model" data-color="${color}">
-      <img class="viewer-fallback" src="/api/queue/${jobId}/thumbnail" alt="" onerror="this.remove()" />
+      <img class="viewer-fallback" src="/api/queue/${jobId}/thumbnail" alt="" data-onerror="remove" />
     </div>
   `;
 }
@@ -355,10 +362,10 @@ function swatchDot(color: string): Html {
  *  against a wrong mapping, so it leans on color, not just text. */
 function renderConfirmPanel(job: JobRow | null, projects: ProjectRow[] = []): Html {
   if (!job) {
-    return html`<div class="modal-overlay" data-close><div class="modal-box">ジョブが見つかりません。<div class="modal-actions"><button class="act" data-close>閉じる</button></div></div></div>`;
+    return html`<div class="modal-overlay" data-close><div class="modal-box"${MODAL_BOX_A11Y}>ジョブが見つかりません。<div class="modal-actions"><button class="act" data-close>閉じる</button></div></div></div>`;
   }
   if (job.status !== "processing") {
-    return html`<div class="modal-overlay" data-close><div class="modal-box">このジョブは確認待ちではありません（${STATUS_META[job.status].label}）。<div class="modal-actions"><button class="act" data-close>閉じる</button></div></div></div>`;
+    return html`<div class="modal-overlay" data-close><div class="modal-box"${MODAL_BOX_A11Y}>このジョブは確認待ちではありません（${STATUS_META[job.status].label}）。<div class="modal-actions"><button class="act" data-close>閉じる</button></div></div></div>`;
   }
   const filaments = parseFilaments(job.filaments);
   const mapping = parseMapping(job.ams_mapping);
@@ -389,7 +396,7 @@ function renderConfirmPanel(job: JobRow | null, projects: ProjectRow[] = []): Ht
         });
   return html`
     <div class="modal-overlay" data-close>
-      <div class="modal-box" data-confirm-job="${job.id}">
+      <div class="modal-box"${MODAL_BOX_A11Y}>
         <h2 class="modal-title">フィラメント確認</h2>
         <p class="muted">${job.filename}</p>
         ${renderViewer(job.id, filaments[0]?.color)}
