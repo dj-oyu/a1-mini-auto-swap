@@ -446,30 +446,71 @@ function swatchDot(color: string): Html {
 /** Plate-selection section (multi-plate 3mf upload): only rendered when the
  *  archive carries more than one Metadata/plate_N.gcode — a single-plate
  *  upload keeps behaving exactly as before (no picker, auto-discovery at
- *  dispatch time). Labeled radios, not thumbnails: not every plate of a
- *  multi-plate export carries its own embedded PNG, so this leans on the
- *  plate id + a static per-plate time estimate when available (listPlates).
- *  A live per-plate 3D preview is a follow-up (needs its own mesh extraction);
- *  the existing viewer above still shows the archive's overall model.
+ *  dispatch time).
+ *
+ *  This is an ORDERED SEQUENCE BUILDER, not a set picker: the whole point of
+ *  the system is continuous multi-plate printing, and a model with one letter
+ *  per plate must be printable as a WORD ("BOB" = plate_B, plate_O, plate_B),
+ *  which needs both ORDER and REPEATS. A checkbox set can express neither.
+ *
+ *  Layout:
+ *   - a PALETTE of plate chips (data-plate-add) — clicking one APPENDS that
+ *     plate to the sequence (a plate may be added many times); plus a 全追加
+ *     button that appends every plate once in ascending order.
+ *   - an ordered 印刷シーケンス list (data-seq-list) below, each row carrying
+ *     data-plate + remove/↑/↓ controls; app.js renumbers + counts on change.
+ *  The sequence is pre-populated with every plate once (ascending) so the
+ *  common "print all plates" case is one click away; spelling a word means
+ *  removing/reordering rows or clearing and re-adding via the palette.
+ *
+ *  Labels are プレートN (the gcode plate number). Per-plate object NAMES would
+ *  be nicer for spelling words but the gcode→model_settings→object-name mapping
+ *  is fragile across Bambu Studio versions; the read-only preview TABS above
+ *  already let a human identify each plate, so プレートN is the deliberate,
+ *  robust fallback (spec: don't over-engineer this).
+ *
  *  Deliberately worded to not be confused with the filament list below, which
  *  is project-wide (spec: parseFilaments reads project_settings.config, not
- *  any one plate). */
-function renderPlateSelect(plates: PlateInfo[], selected: string | null): Html {
-  const chosen = selected != null && plates.some((p) => p.plate === selected) ? selected : plates[0]!.plate;
-  const opts = plates.map(
+ *  any one plate) nor with the read-only preview tabs above. */
+function renderPlateSelect(plates: PlateInfo[]): Html {
+  const chips = plates.map(
     (p) => html`
-      <label class="plate-opt">
-        <input type="radio" name="plate" data-plate="${p.plate}" value="${p.plate}" ${p.plate === chosen ? "checked" : ""} />
-        <span class="plate-label">${p.plate}</span>
+      <button type="button" class="plate-chip" data-plate-add="${p.plate}" data-plate-label="プレート ${plateNumLabel(p.plate)}">
+        <span class="plate-label">プレート ${plateNumLabel(p.plate)}</span>
         ${p.estimatedSeconds != null ? html`<span class="plate-eta">${fmtDuration(p.estimatedSeconds)}</span>` : ""}
-      </label>
+      </button>
     `,
   );
+  // Initial sequence = every plate once, ascending (the "print all" default).
+  const rows = plates.map((p, i) => seqRow(p.plate, i + 1));
   return html`
-    <div class="plate-select">
-      <p class="muted">印刷対象プレート（このプロジェクトの3mfに複数プレートが含まれています。印刷するプレートを1枚選んでください。下のフィラメント一覧はプロジェクト全体の設定です）</p>
-      <div class="plate-list">${opts}</div>
+    <div class="plate-select" data-plate-seq>
+      <p class="muted">印刷シーケンス（順番・繰り返し可）：複数プレートを含む3mfです。チップを押すとその順にプレートを追加できます（同じプレートを何度でも追加でき、単語を綴れます）。上の<strong>プレビュー(タブ)</strong>は表示専用で、実際に<strong>印刷するのは下のシーケンス</strong>（この順・この枚数）です。フィラメント一覧はプロジェクト全体の設定です。</p>
+      <div class="plate-palette" role="group" aria-label="プレートを追加">
+        ${chips}
+        <button type="button" class="act plate-add-all" data-plate-add-all>全追加</button>
+      </div>
+      <ol class="plate-seq-list" data-seq-list>${rows}</ol>
+      <p class="muted plate-seq-count"><span data-seq-count>${plates.length}</span> 枚</p>
+      <p class="err plate-seq-error" data-seq-error hidden>印刷するプレートを1枚以上追加してください</p>
     </div>
+  `;
+}
+
+/** One row of the ordered print sequence. data-plate is authoritative on submit
+ *  (app.js reads the list top-to-bottom into selected_plates). The index label
+ *  is cosmetic — app.js renumbers on every add/remove/reorder. */
+function seqRow(plate: string, idx: number): Html {
+  return html`
+    <li class="plate-seq-item" data-seq-item data-plate="${plate}">
+      <span class="seq-idx">${idx}</span>
+      <span class="seq-label">プレート ${plateNumLabel(plate)}</span>
+      <span class="seq-controls">
+        <button type="button" class="act move" data-seq-up title="上へ" aria-label="上へ">↑</button>
+        <button type="button" class="act move" data-seq-down title="下へ" aria-label="下へ">↓</button>
+        <button type="button" class="act danger" data-seq-remove title="削除" aria-label="この行を削除">✕</button>
+      </span>
+    </li>
   `;
 }
 
@@ -523,7 +564,7 @@ function renderConfirmPanel(
         <p class="muted">${job.filename}</p>
         ${previewPlates.length > 1 ? renderPlateTabs(previewPlates, previewPlates[0]!.plate) : ""}
         ${renderViewer(job.id, filaments[0]?.color, previewPlates.length > 0, false, previewPlates[0]?.plate)}
-        ${plates.length > 1 ? renderPlateSelect(plates, job.selected_plate) : ""}
+        ${plates.length > 1 ? renderPlateSelect(plates) : ""}
         <div class="fil-list">${rows}</div>
         <label class="proj-assign">プロジェクト
           <select data-project>${projectOpts}</select>

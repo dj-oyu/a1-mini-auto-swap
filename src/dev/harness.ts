@@ -67,7 +67,7 @@ if (process.env.AUTH_TOKEN) {
   app.route("/", createLoginApp(process.env.AUTH_TOKEN));
 }
 app.route("/", createApiApp(repo));
-app.route("/", createWriteApp({ repo, dispatcher }));
+app.route("/", createWriteApp({ repo, dispatcher, cacheDir }));
 app.route("/", createUploadApp({ repo, cacheDir }));
 app.route("/", createThumbnailApp({ repo, cacheDir }));
 app.route("/", createModelApp({ repo, cacheDir }));

@@ -1,7 +1,11 @@
+import { copyFileSync, existsSync, readFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Dispatcher } from "../core/dispatcher.ts";
 import { isValidAmsMapping } from "../core/ams-mapping.ts";
+import { cacheFileName } from "../core/artifact.ts";
+import { listPlates } from "../injection/threemf.ts";
 import type { Repo } from "../db/repo.ts";
 import { moduleLogger } from "../obs/default-logger.ts";
 
@@ -32,6 +36,15 @@ const filamentsPatchSchema = z.object({
   selected_plate: z
     .string()
     .regex(/^plate_\d+$/, "selected_plate must look like plate_<N>")
+    .optional(),
+  // Multi-plate SELECTION / fan-out (plate-multiselect): an ORDERED list of the
+  // plates to print, one queue job per element. Order and duplicates are
+  // SIGNIFICANT — ["plate_2","plate_15","plate_2"] spells B,O,B and yields three
+  // jobs in that order. Authoritative over `selected_plate` when non-empty. Each
+  // element must also be one of the archive's gcode plates (checked vs the cache
+  // in the handler). undefined/empty = fall back to the legacy single-plate path.
+  selected_plates: z
+    .array(z.string().regex(/^plate_\d+$/, "each plate must look like plate_<N>"))
     .optional(),
 });
 
@@ -87,9 +100,31 @@ function triggerDispatch(dispatcher: Dispatcher): void {
   });
 }
 
-export function createWriteApp(deps: { repo: Repo; dispatcher: Dispatcher }): Hono {
-  const { repo, dispatcher } = deps;
+export function createWriteApp(deps: {
+  repo: Repo;
+  dispatcher: Dispatcher;
+  // Upload-cache dir (same one createUploadApp writes to). Required for the
+  // multi-plate fan-out path, which copies the cached .gcode.3mf per clone so
+  // each plate can be dispatched independently. Optional so the many single-job
+  // write-route tests can construct the app without a cache.
+  cacheDir?: string;
+}): Hono {
+  const { repo, dispatcher, cacheDir } = deps;
   const app = new Hono();
+
+  // The set of printable (gcode-backed) plate ids the cached archive carries, or
+  // null when the cache is unavailable/unreadable. Used to reject a fan-out that
+  // names a plate the archive doesn't actually contain. Best-effort, never throws.
+  const readArchivePlates = (jobId: number): Set<string> | null => {
+    if (!cacheDir) return null;
+    try {
+      const path = join(cacheDir, cacheFileName(jobId));
+      if (!existsSync(path)) return null;
+      return new Set(listPlates(readFileSync(path)).map((p) => p.plate));
+    } catch {
+      return null;
+    }
+  };
 
   // POST /api/stocker — set the stocker capacity (and reset remaining to it).
   // spec 11: capacity is a hardware-fixed value; this is how a fresh install
@@ -170,10 +205,65 @@ export function createWriteApp(deps: { repo: Repo; dispatcher: Dispatcher }): Ho
       return c.json({ error: "project_id must be null or an existing project id" }, 400);
     }
 
+    // The fan-out plate list (ordered, duplicates significant) is authoritative
+    // over the legacy single `selected_plate` when present & non-empty.
+    const platesSeq = body.data.selected_plates;
+    if (platesSeq && platesSeq.length > 0) {
+      const archive = readArchivePlates(id);
+      // Fan-out needs the cached artifact both to validate membership and to copy
+      // per clone. No readable archive ⇒ can't safely fan out (would create jobs
+      // pointing at a missing file) → reject before mutating anything.
+      if (!archive) {
+        return c.json({ error: "cached artifact unavailable for plate selection" }, 400);
+      }
+      const unknown = platesSeq.find((p) => !archive.has(p));
+      if (unknown) {
+        return c.json({ error: `unknown plate: ${unknown}` }, 400);
+      }
+    }
+
     repo.setFilamentPlan(id, body.data.ams_mapping, body.data.filaments);
     if (body.data.project_id !== undefined) repo.setProject(id, body.data.project_id);
-    if (body.data.selected_plate !== undefined) repo.setSelectedPlate(id, body.data.selected_plate);
-    await dispatcher.enqueue(id); // processing → queued (spec ch6)
+
+    if (platesSeq && platesSeq.length > 0) {
+      // K plates → this job takes the FIRST; each additional plate becomes a
+      // CLONE (same plan + project) with its own copied artifact, enqueued in
+      // array order. The copy happens BEFORE enqueue so a clone is never queued
+      // pointing at a missing file; if any copy fails we roll back every clone
+      // created in this request and 500 (no half-created queued jobs).
+      const [first, ...rest] = platesSeq;
+      const srcPath = join(cacheDir!, cacheFileName(id));
+      const created: { cloneId: number; path: string }[] = [];
+      try {
+        for (const plate of rest) {
+          const cloneId = repo.cloneJob(id, { selected_plate: plate });
+          const dst = join(cacheDir!, cacheFileName(cloneId));
+          copyFileSync(srcPath, dst);
+          created.push({ cloneId, path: dst });
+        }
+      } catch (e) {
+        for (const c2 of created) {
+          try {
+            unlinkSync(c2.path);
+          } catch {
+            /* best-effort */
+          }
+          repo.deleteJob(c2.cloneId);
+        }
+        moduleLogger("dispatch").error("plate fan-out failed; rolled back clones", {
+          event: "fanout_failed",
+          job_id: id,
+          err: e instanceof Error ? e.message : String(e),
+        });
+        return c.json({ error: "failed to prepare plate clones" }, 500);
+      }
+      repo.setSelectedPlate(id, first!);
+      await dispatcher.enqueue(id); // this job (first plate) → queued
+      for (const { cloneId } of created) await dispatcher.enqueue(cloneId); // clones in order
+    } else {
+      if (body.data.selected_plate !== undefined) repo.setSelectedPlate(id, body.data.selected_plate);
+      await dispatcher.enqueue(id); // processing → queued (spec ch6)
+    }
     for (const a of repo.getUnresolvedPendingActions()) {
       if (a.type === "filament_confirm" && a.job_id === id) repo.resolvePendingAction(a.id);
     }

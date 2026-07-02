@@ -140,8 +140,92 @@
 
     // MVP #5: the filament-confirm modal. Cancel/backdrop close it; 確定 gathers
     // the per-slot AMS selects into a 4-element mapping and PATCHes the job.
+    // Ordered print-sequence builder (multi-plate 3mf confirm modal). The list
+    // is authoritative on submit: app.js reads it top-to-bottom into
+    // selected_plates (order + duplicates significant → spells words like BOB).
+    function seqListOf(box) { return box && box.querySelector('[data-seq-list]'); }
+    function renumberSeq(box) {
+      var list = seqListOf(box);
+      if (!list) return;
+      var items = list.querySelectorAll('[data-seq-item]');
+      for (var i = 0; i < items.length; i++) {
+        var idx = items[i].querySelector('.seq-idx');
+        if (idx) idx.textContent = String(i + 1);
+      }
+      var cnt = box.querySelector('[data-seq-count]');
+      if (cnt) cnt.textContent = String(items.length);
+      var err = box.querySelector('[data-seq-error]');
+      if (err && items.length > 0) err.hidden = true;
+    }
+    function makeSeqRow(plate, label) {
+      var li = document.createElement('li');
+      li.className = 'plate-seq-item';
+      li.setAttribute('data-seq-item', '');
+      li.setAttribute('data-plate', plate);
+      li.innerHTML =
+        '<span class="seq-idx"></span><span class="seq-label"></span>' +
+        '<span class="seq-controls">' +
+        '<button type="button" class="act move" data-seq-up aria-label="上へ">↑</button>' +
+        '<button type="button" class="act move" data-seq-down aria-label="下へ">↓</button>' +
+        '<button type="button" class="act danger" data-seq-remove aria-label="この行を削除">✕</button>' +
+        '</span>';
+      li.querySelector('.seq-label').textContent = label || ('プレート ' + plate.replace(/^plate_/, ''));
+      return li;
+    }
+
     document.body.addEventListener('click', function (e) {
       if (e.target.hasAttribute && e.target.hasAttribute('data-close')) { closeModal(); return; }
+
+      // print-sequence builder: append one plate (a plate may be added many times)
+      var addChip = e.target.closest && e.target.closest('[data-plate-add]');
+      if (addChip) {
+        var abox = addChip.closest('.modal-box');
+        var alist = seqListOf(abox);
+        if (alist) {
+          alist.appendChild(makeSeqRow(addChip.getAttribute('data-plate-add'), addChip.getAttribute('data-plate-label')));
+          renumberSeq(abox);
+        }
+        return;
+      }
+      // append every plate once, in palette (ascending) order — "print all"
+      var addAll = e.target.closest && e.target.closest('[data-plate-add-all]');
+      if (addAll) {
+        var allBox = addAll.closest('.modal-box');
+        var allList = seqListOf(allBox);
+        if (allList) {
+          var chips = allBox.querySelectorAll('[data-plate-add]');
+          for (var ci = 0; ci < chips.length; ci++) {
+            allList.appendChild(makeSeqRow(chips[ci].getAttribute('data-plate-add'), chips[ci].getAttribute('data-plate-label')));
+          }
+          renumberSeq(allBox);
+        }
+        return;
+      }
+      // remove a sequence row
+      var seqRm = e.target.closest && e.target.closest('[data-seq-remove]');
+      if (seqRm) {
+        var rmBox = seqRm.closest('.modal-box');
+        var rmItem = seqRm.closest('[data-seq-item]');
+        if (rmItem) rmItem.remove();
+        renumberSeq(rmBox);
+        return;
+      }
+      // reorder a sequence row (↑/↓)
+      var seqUp = e.target.closest && e.target.closest('[data-seq-up]');
+      var seqDown = e.target.closest && e.target.closest('[data-seq-down]');
+      if (seqUp || seqDown) {
+        var mvBox = (seqUp || seqDown).closest('.modal-box');
+        var mvItem = (seqUp || seqDown).closest('[data-seq-item]');
+        if (mvItem) {
+          if (seqUp && mvItem.previousElementSibling) {
+            mvItem.parentNode.insertBefore(mvItem, mvItem.previousElementSibling);
+          } else if (seqDown && mvItem.nextElementSibling) {
+            mvItem.parentNode.insertBefore(mvItem.nextElementSibling, mvItem);
+          }
+          renumberSeq(mvBox);
+        }
+        return;
+      }
 
       // camera modal is a live MJPEG stream now — no manual 更新 needed.
 
@@ -240,10 +324,22 @@
       var payload = { ams_mapping: map };
       var proj = box.querySelector('[data-project]');
       if (proj) payload.project_id = proj.value === '' ? null : Number(proj.value);
-      // multi-plate 3mf upload: which Metadata/plate_N.gcode to print (only
-      // present when the archive had more than one plate — see renderPlateSelect)
-      var plateInput = box.querySelector('input[name="plate"]:checked');
-      if (plateInput) payload.selected_plate = plateInput.value;
+      // multi-plate 3mf upload: the ORDERED print sequence (see renderPlateSelect).
+      // Only present when the archive had more than one plate. The list is
+      // authoritative: read top-to-bottom into selected_plates WITH duplicates +
+      // order (so "BOB" = plate_B, plate_O, plate_B fans out to three jobs).
+      var seq = box.querySelector('[data-plate-seq]');
+      if (seq) {
+        var seqItems = seq.querySelectorAll('[data-seq-item]');
+        var plates = Array.prototype.map.call(seqItems, function (li) { return li.getAttribute('data-plate'); });
+        if (plates.length === 0) {
+          var seqErr = seq.querySelector('[data-seq-error]');
+          if (seqErr) seqErr.hidden = false; // block submit, surface inline message
+          return;
+        }
+        payload.selected_plates = plates;
+        payload.selected_plate = plates[0]; // legacy back-compat (first plate)
+      }
       btn.disabled = true;
       fetch('/api/queue/' + id + '/filaments', {
         method: 'PATCH',

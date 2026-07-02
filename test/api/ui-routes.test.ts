@@ -442,54 +442,74 @@ describe("GET / (dashboard SSR)", () => {
     });
   });
 
-  describe("plate selection (multi-plate 3mf upload)", () => {
-    test("a multi-plate archive shows a plate picker with a radio per plate", async () => {
+  describe("plate selection — ordered sequence builder (multi-plate 3mf upload)", () => {
+    test("a multi-plate archive renders a plate palette + an ordered sequence list", async () => {
       const id = repo.createJob({ filename: "multi.3mf", filaments: [{ slot: 1, color: "#112233" }] });
       writeCachedThreemf(id, [1, 24], { 1: 3600, 24: 1800 });
 
       const res = await app.request(`/ui/queue/${id}/confirm`);
       const text = await res.text();
-      expect(text).toContain("印刷対象プレート");
-      expect(text).toContain('data-plate="plate_1"');
-      expect(text).toContain('data-plate="plate_24"');
+      // it's a SEQUENCE (order + repeats), not a set — caption + list markers
+      expect(text).toContain("印刷シーケンス");
+      expect(text).toContain("data-plate-seq");
+      expect(text).toContain("data-seq-list");
+      // a palette chip per printable plate (append-on-click), plus 全追加
+      expect(text).toContain('data-plate-add="plate_1"');
+      expect(text).toContain('data-plate-add="plate_24"');
+      expect(text).toContain("全追加");
+      expect(text).toContain("data-plate-add-all");
+      // NOT the old single-select radios
+      expect(text).not.toContain('type="radio"');
       // static per-plate estimate, when the archive carries a plate_N.json
       expect(text).toContain("1時間"); // plate_1: 3600s
       expect(text).toContain("30分"); // plate_24: 1800s
       // no thumbnail dependency: no per-plate thumbnail endpoint call
       expect(text).not.toContain("thumbnail?plate=");
-      // first plate defaults checked when nothing has been selected yet
-      expect(text).toMatch(/data-plate="plate_1"[^>]*checked/);
     });
 
-    test("a previously-selected plate stays checked", async () => {
+    test("the sequence is pre-populated with every plate once, in ascending order", async () => {
       const id = repo.createJob({ filename: "multi.3mf" });
-      writeCachedThreemf(id, [1, 24]);
-      repo.setSelectedPlate(id, "plate_24");
+      writeCachedThreemf(id, [1, 2, 3]);
 
       const text = await (await app.request(`/ui/queue/${id}/confirm`)).text();
-      expect(text).toMatch(/data-plate="plate_24"[^>]*checked/);
-      expect(text).not.toMatch(/data-plate="plate_1"[^>]*checked/);
+      // one seq row per plate, ascending; each row carries data-plate + remove control
+      const rows = text.match(/data-seq-item data-plate="plate_\d+"/g) ?? [];
+      expect(rows).toEqual([
+        'data-seq-item data-plate="plate_1"',
+        'data-seq-item data-plate="plate_2"',
+        'data-seq-item data-plate="plate_3"',
+      ]);
+      expect(text).toContain("data-seq-remove");
+      expect(text).toContain("data-seq-up");
+      expect(text).toContain("data-seq-down");
+      // running count reflects the initial sequence length
+      expect(text).toMatch(/data-seq-count[^>]*>3</);
     });
 
-    test("a single-plate archive shows no plate picker (unchanged behaviour)", async () => {
+    test("a single-plate archive shows no sequence builder (unchanged behaviour)", async () => {
       const id = repo.createJob({ filename: "single.3mf" });
       writeCachedThreemf(id, [1]);
 
       const text = await (await app.request(`/ui/queue/${id}/confirm`)).text();
-      expect(text).not.toContain("印刷対象プレート");
-      expect(text).not.toContain('name="plate"');
+      expect(text).not.toContain("印刷シーケンス");
+      expect(text).not.toContain("data-plate-seq");
+      expect(text).not.toContain("data-plate-add");
     });
 
-    test("no cached artifact at all also shows no plate picker", async () => {
+    test("no cached artifact at all also shows no sequence builder", async () => {
       const id = repo.createJob({ filename: "nocache.3mf" }); // nothing written to cacheDir
       const text = await (await app.request(`/ui/queue/${id}/confirm`)).text();
-      expect(text).not.toContain("印刷対象プレート");
+      expect(text).not.toContain("印刷シーケンス");
+      expect(text).not.toContain("data-plate-seq");
     });
 
-    test("the client submits the checked plate as selected_plate", async () => {
+    test("the client submits the ordered sequence (with duplicates) as selected_plates", async () => {
       const js = await asset("/vendor/app.js");
-      expect(js).toContain("selected_plate");
-      expect(js).toContain('input[name="plate"]:checked');
+      expect(js).toContain("selected_plates");
+      expect(js).toContain("data-plate-seq");
+      expect(js).toContain("data-seq-item");
+      // empty-sequence guard surfaces the inline message instead of PATCHing
+      expect(js).toContain("data-seq-error");
     });
   });
 
