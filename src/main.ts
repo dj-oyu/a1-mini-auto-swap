@@ -11,7 +11,13 @@ import { createPrinterApp, printerStatusView } from "./api/printer-routes.ts";
 import { createSnapshotApp, type SnapshotSource } from "./api/snapshot-routes.ts";
 import { createDiagnosticsApp } from "./api/diagnostics-routes.ts";
 import { createUiApp } from "./api/ui-routes.ts";
+import { createVerifyApp } from "./api/verify-routes.ts";
 import { createEventsApp } from "./api/events-routes.ts";
+import { runDiagnostics, type DiagnosticsOptions } from "./orchestrator/diagnostics.ts";
+import { uploadBytes } from "./orchestrator/ftps-client.ts";
+import { A1_MINI_SAFE_BOUNDS, buildDryRehearsalGcode } from "./core/dry-gcode.ts";
+import { packageGcodeThreemf } from "./injection/gcode-threemf.ts";
+import { findUnsafeLines } from "../scripts/dry-rehearsal-3mf.ts";
 import { createAuth, createLoginApp } from "./api/auth.ts";
 import { SseBroadcaster } from "./orchestrator/sse-notifier.ts";
 import { OrchestratorMqttClient } from "./orchestrator/mqtt-client.ts";
@@ -88,9 +94,10 @@ const resolver: ArtifactResolver = (job) => {
     amsMapping: parseAmsMapping(job.ams_mapping), // validated, throws on corrupt data (INV-MQTT-01)
   };
 };
+const printerFtps = { host: PRINTER_HOST, port: PRINTER_FTPS_PORT, accessCode: PRINTER_ACCESS_CODE };
 const printer = new MqttFtpsPrinter(
   mqtt,
-  { host: PRINTER_HOST, port: PRINTER_FTPS_PORT, accessCode: PRINTER_ACCESS_CODE },
+  printerFtps,
   resolver,
   // spec 6/19 + INV-MQTT-02: after stop, send the dedicated eject job (homing +
   // the same swap sequence the profile bakes in) to return the mechanism to a
@@ -109,6 +116,44 @@ if (DISCORD_WEBHOOK_URL) {
   notifiers.push(new WebhookNotifier({ url: DISCORD_WEBHOOK_URL, baseUrl: BASE_URL }));
 }
 const notifier = new CompositeNotifier(notifiers);
+
+// Connectivity-probe target, shared by GET /api/diagnostics and the /verify
+// wizard's Stage 1-3 (spec 20.7). Built from the configured printer; the access
+// code is used only as a credential and never surfaced in results.
+const diagTarget: DiagnosticsOptions = {
+  host: PRINTER_HOST,
+  mqttPort: PRINTER_MQTT_PORT,
+  ftpsPort: PRINTER_FTPS_PORT,
+  serial: PRINTER_SERIAL,
+  accessCode: PRINTER_ACCESS_CODE,
+};
+
+// Stage 5 dry-rehearsal: build the print-free motion test with the shared A1
+// safe bounds, run the last-line-of-defense heater/extrusion guard, package it,
+// FTPS-upload it and start it via MQTT. The remote name sits OUTSIDE the `job-`
+// prefix so the monitor never mis-attributes it to a DB job (core/artifact.ts).
+const DRY_REHEARSAL_ARTIFACT = "dry-rehearsal.gcode.3mf";
+async function startDryRun(): Promise<void> {
+  const gcode = buildDryRehearsalGcode(A1_MINI_SAFE_BOUNDS, {
+    sweepDurationMs: 5000,
+    feedrate: 3000,
+    danceAmplitudeMm: 30,
+  });
+  const unsafe = findUnsafeLines(gcode);
+  if (unsafe.length > 0) {
+    // Never publish a rehearsal that could heat or extrude (INV-DRY-01/02).
+    throw new Error(`refusing dry-rehearsal: ${unsafe.length} unsafe line(s) (heater/E-axis, INV-DRY-01/02)`);
+  }
+  const bytes = packageGcodeThreemf(gcode);
+  await uploadBytes(printerFtps, bytes, DRY_REHEARSAL_ARTIFACT);
+  mqtt.publishProjectFile({
+    param: "Metadata/plate_1.gcode",
+    url: `ftp:///cache/${DRY_REHEARSAL_ARTIFACT}`,
+    amsMapping: [-1, -1, -1, -1], // motion only — no filament use
+    useAms: false,
+    sequenceId: "dry-rehearsal",
+  });
+}
 
 // ── boot ───────────────────────────────────────────────────────────────────
 await mqtt.connect();
@@ -155,16 +200,22 @@ app.route(
   createDiagnosticsApp({
     // GET /api/diagnostics — connectivity probe against the configured printer
     // (spec 20.7). Same logic for stub or real A1 mini; eases Phase 8 cutover.
-    target: {
-      host: PRINTER_HOST,
-      mqttPort: PRINTER_MQTT_PORT,
-      ftpsPort: PRINTER_FTPS_PORT,
-      serial: PRINTER_SERIAL,
-      accessCode: PRINTER_ACCESS_CODE,
-    },
+    target: diagTarget,
   }),
 );
 app.route("/", createUiApp(repo)); // GET / → server-rendered dashboard (spec 17)
+app.route(
+  "/",
+  createVerifyApp({
+    // GET /verify — the Stage 1-7 real-hardware verification wizard. Every real
+    // I/O is injected here; the routes hold no domain logic.
+    repo,
+    runDiagnostics: () => runDiagnostics(diagTarget),
+    printerStatus: () => printerStatusView(repo.listByStatus("printing")[0] ?? null, mqtt.latest()),
+    startDryRun,
+    eject: () => printer.ejectAndReset(),
+  }),
+);
 app.route("/", createEventsApp(sse)); // GET /events → SSE live updates (spec 17)
 
 const server = Bun.serve({ port: HTTP_PORT, fetch: app.fetch });

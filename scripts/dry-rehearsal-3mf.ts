@@ -11,7 +11,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { type Axis, type Bounds3D, buildDryRehearsalGcode } from "../src/core/dry-gcode.ts";
+import { A1_MINI_SAFE_BOUNDS, type Axis, type Bounds3D, buildDryRehearsalGcode } from "../src/core/dry-gcode.ts";
 import { packageGcodeThreemf } from "../src/injection/gcode-threemf.ts";
 import { gcodeMd5 } from "../src/injection/md5.ts";
 
@@ -21,24 +21,12 @@ export const DEFAULT_FEEDRATE = 3000;
 export const DEFAULT_AMPLITUDE = 30;
 
 /**
- * A1 mini's nominal build volume is 180x180x180mm (bed X/Y, gantry Z). The
- * exact frame/gantry clearance near the physical edges is unverified against
- * real hardware pre-Stage-5 (dry-rehearsal-gcode-spec.md §10 lists this as an
- * open item), so this CLI deliberately trades a bit of coverage for safety
- * margin beyond dry-gcode.ts's own per-move clamp (INV-DRY-04):
- *   - X/Y: 10mm inset from each edge (10..170) — keeps the nozzle/gantry off
- *     the frame and any edge-mounted hardware (e.g. the swap mechanism).
- *   - Z: 5mm off the bed (avoids a bed-strike from Z homing tolerance) and
- *     10mm below the top of the gantry travel (170 of 180) to avoid topping
- *     out against the frame/belt hardware at full extension.
- * These are intentionally conservative; loosen only after a supervised
- * Stage 5 run confirms real clearances.
+ * The A1-mini dry-rehearsal safe bounds now live in core
+ * (`A1_MINI_SAFE_BOUNDS`) so the /verify orchestrator wiring can reuse the exact
+ * same margins this CLI does. Re-exported under the historical name to keep the
+ * CLI/tests's vocabulary stable — behaviour is unchanged (same values).
  */
-export const DEFAULT_BOUNDS: Bounds3D = {
-  x: { min: 10, max: 170 },
-  y: { min: 10, max: 170 },
-  z: { min: 5, max: 170 },
-};
+export const DEFAULT_BOUNDS: Bounds3D = A1_MINI_SAFE_BOUNDS;
 
 export interface DryRehearsalCliOptions {
   out: string;

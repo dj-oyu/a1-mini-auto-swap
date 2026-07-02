@@ -26,6 +26,29 @@ export interface Bounds3D {
   z: Axis;
 }
 
+/**
+ * A1 mini dry-rehearsal safe build volume (dry-rehearsal-gcode-spec.md §10).
+ * A pure data constant (no I/O), so it belongs in core next to the generator it
+ * parameterises — the dry-rehearsal CLI (scripts/) and the /verify orchestrator
+ * wiring both reuse this single source of truth.
+ *
+ * A1 mini's nominal build volume is 180×180×180mm. The exact frame/gantry
+ * clearance near the edges is unverified against real hardware pre-Stage-5, so
+ * these bounds deliberately trade a little coverage for safety margin beyond
+ * dry-gcode.ts's own per-move clamp (INV-DRY-04):
+ *   - X/Y: 10mm inset from each edge (10..170) — keeps the nozzle/gantry off the
+ *     frame and any edge-mounted hardware (e.g. the swap mechanism).
+ *   - Z: 5mm off the bed (avoids a bed-strike from Z homing tolerance) and 10mm
+ *     below the top of gantry travel (170 of 180) to avoid topping out against
+ *     the frame/belt hardware at full extension.
+ * Intentionally conservative; loosen only after a supervised Stage 5 run.
+ */
+export const A1_MINI_SAFE_BOUNDS: Bounds3D = {
+  x: { min: 10, max: 170 },
+  y: { min: 10, max: 170 },
+  z: { min: 5, max: 170 },
+};
+
 export interface DryRehearsalOptions {
   sweepDurationMs: number;
   feedrate: number; // mm/min
