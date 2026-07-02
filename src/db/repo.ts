@@ -170,10 +170,13 @@ export class Repo implements QueueStore {
 
   // ── pending actions ───────────────────────────────────────────────────────
   createPendingAction(input: CreatePendingActionInput): number {
+    // notified_at is stamped at creation: creators always send the initial
+    // notification (spec 13/15), so escalation (INV-PENDING-03) measures its
+    // interval from here rather than double-notifying a fresh action.
     const r = this.db
       .query(
-        `INSERT INTO pending_actions (type, severity, job_id, project_id, message)
-         VALUES (?,?,?,?,?) RETURNING id`,
+        `INSERT INTO pending_actions (type, severity, job_id, project_id, message, notified_at)
+         VALUES (?,?,?,?,?, datetime('now')) RETURNING id`,
       )
       .get(
         input.type,
@@ -196,6 +199,10 @@ export class Repo implements QueueStore {
       )
       .get(projectId, type);
     return r != null;
+  }
+  /** Record a (re-)notification time for escalation (INV-PENDING-03). */
+  markPendingNotified(id: number, atIso: string): void {
+    this.db.query("UPDATE pending_actions SET notified_at=? WHERE id=?").run(atIso, id);
   }
   resolvePendingAction(id: number): void {
     this.db
