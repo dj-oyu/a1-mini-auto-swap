@@ -1,9 +1,10 @@
 // 実機検証ガイド (/verify) client. Mirrors app.js conventions: delegated
 // listeners on document.body so wiring survives htmx fragment swaps, no inline
-// handlers (CSP-friendly), shared helpers via window.PF. Owns three bits of
+// handlers (CSP-friendly), shared helpers via window.PF. Owns four bits of
 // interactivity the SSR fragment can't: the physical-safety checkbox gate on the
-// Stage 5 run button, the dry-run / eject fetch calls, and the SSE 'progress'
-// live display (which auto-marks Stage 5 passed on FINISH).
+// Stage 5 run button, the dry-run / eject fetch calls, the SSE 'upload_progress'
+// FTPS-transfer bar, and the SSE 'progress' live display (which auto-marks
+// Stage 5 passed on FINISH).
 (function () {
   // ── Stage 5: physical-safety gate ──────────────────────────────────────────
   function updateDryButton() {
@@ -106,10 +107,35 @@
     if (state === 'FINISH') markStage5Passed();
   }
 
+  // ── SSE: Stage 5 FTPS upload-progress bar ───────────────────────────────────
+  // Only the dry-rehearsal transfer is relevant here (context "dry-rehearsal");
+  // job-/eject- contexts belong to the dashboard, not this page.
+  function fmtMb(bytes) { return (Number(bytes) / (1024 * 1024)).toFixed(1); }
+  function showUploadProgress(p) {
+    if (!p || p.context !== 'dry-rehearsal') return;
+    var live = document.getElementById('verifyUploadLive');
+    if (!live) return;
+    live.hidden = false;
+    var sent = Number(p.bytesSent) || 0;
+    var total = Number(p.totalBytes) || 0;
+    var pct = total > 0 ? Math.floor((sent / total) * 100) : 0;
+    var msgEl = live.querySelector('[data-upload-msg]');
+    var bar = live.querySelector('.prog-bar');
+    if (bar) bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    if (msgEl) {
+      msgEl.textContent = total > 0 && sent >= total
+        ? '送信完了、プリンター応答待ち…'
+        : 'アップロード中 ' + pct + '% (' + fmtMb(sent) + '/' + fmtMb(total) + ' MB)';
+    }
+  }
+
   if (!window.EventSource) return; // no SSE → live display simply stays idle
   var es = new EventSource('/events');
   if (window.PF) window.PF.watchConnection(es, document.getElementById('connChip'));
   es.addEventListener('progress', function (e) {
     try { showLive(JSON.parse(e.data)); } catch (_) {}
+  });
+  es.addEventListener('upload_progress', function (e) {
+    try { showUploadProgress(JSON.parse(e.data)); } catch (_) {}
   });
 })();

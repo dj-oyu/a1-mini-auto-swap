@@ -58,6 +58,28 @@ describe("SseBroadcaster", () => {
     expect(frames[0]!.endsWith("\n\n")).toBe(true);
   });
 
+  test("sendUploadProgress emits an event: upload_progress frame with context + byte counts", () => {
+    const b = new SseBroadcaster();
+    const frames: string[] = [];
+    b.subscribe((f) => frames.push(f));
+    b.sendUploadProgress({ context: "job-12", bytesSent: 65536, totalBytes: 1048576 });
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toContain("event: upload_progress");
+    expect(frames[0]).toContain('"context":"job-12"');
+    expect(frames[0]).toContain('"bytesSent":65536');
+    expect(frames[0]).toContain('"totalBytes":1048576');
+    expect(frames[0]!.endsWith("\n\n")).toBe(true);
+  });
+
+  test("sendUploadProgress bypasses the Notifier port shape — no `type` field, unlike notify()", () => {
+    const b = new SseBroadcaster();
+    const frames: string[] = [];
+    b.subscribe((f) => frames.push(f));
+    b.sendUploadProgress({ context: "eject", bytesSent: 10, totalBytes: 10 });
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).not.toContain('"type"');
+  });
+
   test("open() returns an SSE Response and registers a client", () => {
     const b = new SseBroadcaster();
     const res = b.open();

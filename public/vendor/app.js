@@ -332,6 +332,29 @@
       persistOrder(order);
     }
 
+    // FTPS upload-progress indicator (header chip): only job- dispatches are
+    // shown here (eject/dry-rehearsal belong to /verify, not the dashboard).
+    // Hides on completion, and — since a failed/aborted transfer may never
+    // send a completion sample — auto-hides 10s after the last event either way.
+    var uploadChipTimer = null;
+    function hideUploadChip() {
+      var chip = document.getElementById('uploadChip');
+      if (chip) chip.hidden = true;
+    }
+    function showUploadChip(p) {
+      if (!p || typeof p.context !== 'string' || p.context.indexOf('job-') !== 0) return;
+      var chip = document.getElementById('uploadChip');
+      if (!chip) return;
+      clearTimeout(uploadChipTimer);
+      var sent = Number(p.bytesSent) || 0;
+      var total = Number(p.totalBytes) || 0;
+      if (total > 0 && sent >= total) { hideUploadChip(); return; }
+      var pct = total > 0 ? Math.floor((sent / total) * 100) : 0;
+      chip.textContent = '⇪ 送信中 ' + pct + '%';
+      chip.hidden = false;
+      uploadChipTimer = setTimeout(hideUploadChip, 10000);
+    }
+
     if (!window.EventSource) {
       setInterval(pollStatus, 15000); // no SSE → fall back to polling the header
       return;
@@ -340,6 +363,9 @@
     window.PF.watchConnection(es, document.getElementById('connChip'));
     ['job_started','job_finished','job_failed','aborted','stocker_low','waiting_for_refill','pending_action','filament_switched','timeout']
       .forEach(function (t) { es.addEventListener(t, refresh); });
+    // a failed/aborted dispatch means no completion upload_progress sample is
+    // coming — drop the chip immediately instead of waiting for the timeout.
+    ['job_failed', 'aborted'].forEach(function (t) { es.addEventListener(t, hideUploadChip); });
     // build-plate low: pop a toast the moment the last plate is on the bed
     es.addEventListener('stocker_low', function (e) {
       try { showToast(JSON.parse(e.data).message || 'ビルドプレート残りわずか'); } catch (_) {}
@@ -348,5 +374,8 @@
     es.addEventListener('progress', function (e) {
       try { liveStatus = JSON.parse(e.data); } catch (_) {}
       updatePrinting();
+    });
+    es.addEventListener('upload_progress', function (e) {
+      try { showUploadChip(JSON.parse(e.data)); } catch (_) {}
     });
   })();

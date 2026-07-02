@@ -28,6 +28,16 @@ export class SseBroadcaster implements Notifier {
     this.broadcast(`event: progress\ndata: ${JSON.stringify(payload)}\n\n`);
   }
 
+  /** Push an FTPS upload-progress frame (`event: upload_progress`). SSE-only —
+   *  deliberately NOT routed through the Notifier port: a 100MB upload fires
+   *  many samples (even after throttling), and webhook/Discord sinks must not
+   *  be spammed with them. `context` identifies the transfer ("job-{id}",
+   *  "eject", "dry-rehearsal") so a browser can tell which one a frame belongs
+   *  to. */
+  sendUploadProgress(p: { context: string; bytesSent: number; totalBytes: number }): void {
+    this.broadcast(`event: upload_progress\ndata: ${JSON.stringify(p)}\n\n`);
+  }
+
   private broadcast(frame: string): void {
     for (const send of [...this.clients]) {
       try {

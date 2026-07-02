@@ -1,8 +1,9 @@
 import type { JobRow } from "../db/types.ts";
-import type { PrinterPort } from "../core/ports.ts";
+import { systemClock, type PrinterPort } from "../core/ports.ts";
 import { EJECT_ARTIFACT_NAME, printerUploadPath } from "../core/artifact.ts";
 import { OrchestratorMqttClient } from "./mqtt-client.ts";
 import { uploadBytes, type FtpsUploadOptions } from "./ftps-client.ts";
+import { throttleUploadProgress, type UploadProgressSample } from "./upload-progress-throttle.ts";
 
 export interface PrintArtifact {
   bytes: Buffer;
@@ -21,6 +22,12 @@ export interface MqttFtpsPrinterOptions {
    *  set, ejectAndReset sends it as a normal print right after `stop`
    *  (INV-MQTT-02). When absent, ejectAndReset is stop-only (prior behavior). */
   ejectArtifact?: () => Buffer;
+  /** Transfer monitor hook (upload progress indicator): called with a stable
+   *  `context` ("job-{id}" for startPrint, "eject" for ejectAndReset) plus the
+   *  raw {bytesSent,totalBytes} sample, already throttled (see
+   *  upload-progress-throttle.ts) so a caller can forward it straight to SSE
+   *  without flooding. */
+  onUploadProgress?: (context: string, p: UploadProgressSample) => void;
 }
 
 /**
@@ -41,7 +48,11 @@ export class MqttFtpsPrinter implements PrinterPort {
     if (artifact.amsMapping.length !== 4) {
       throw new Error(`ams_mapping must have exactly 4 elements (INV-MQTT-01)`);
     }
-    await uploadBytes(this.ftps, artifact.bytes, printerUploadPath(artifact.remoteName));
+    await uploadBytes(
+      { ...this.ftps, onProgress: this.uploadProgressHook(`job-${job.id}`) },
+      artifact.bytes,
+      printerUploadPath(artifact.remoteName),
+    );
     this.mqtt.publishProjectFile({
       param: artifact.param,
       url: artifact.url,
@@ -63,7 +74,11 @@ export class MqttFtpsPrinter implements PrinterPort {
     this.mqtt.stop();
     const eject = this.opts.ejectArtifact?.();
     if (!eject) return; // no eject artifact configured — stop-only
-    await uploadBytes(this.ftps, eject, printerUploadPath(EJECT_ARTIFACT_NAME));
+    await uploadBytes(
+      { ...this.ftps, onProgress: this.uploadProgressHook("eject") },
+      eject,
+      printerUploadPath(EJECT_ARTIFACT_NAME),
+    );
     this.mqtt.publishProjectFile({
       param: "Metadata/plate_1.gcode",
       url: `ftp:///cache/${EJECT_ARTIFACT_NAME}`,
@@ -82,5 +97,14 @@ export class MqttFtpsPrinter implements PrinterPort {
       `[printer] resumeWithAlternateSlot(job=${jobId}, slot=${slot}) is NOT implemented ` +
         `(spec 19 unverified MQTT command) — the print will stay paused on the printer`,
     );
+  }
+
+  /** Builds a throttled onProgress hook for one upload (fresh state per call —
+   *  each uploadBytes() invocation is its own transfer), or undefined when no
+   *  consumer is wired (uploadBytes then runs with no per-chunk overhead). */
+  private uploadProgressHook(context: string): ((p: UploadProgressSample) => void) | undefined {
+    const sink = this.opts.onUploadProgress;
+    if (!sink) return undefined;
+    return throttleUploadProgress((p) => sink(context, p), systemClock);
   }
 }

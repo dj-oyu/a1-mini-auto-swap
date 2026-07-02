@@ -32,6 +32,7 @@ import { buildEjectThreemf } from "./injection/eject-threemf.ts";
 import { systemClock, type Notifier } from "./core/ports.ts";
 import { parseAmsMapping } from "./core/ams-mapping.ts";
 import { cacheFileName, printArtifactName, printerUploadPath } from "./core/artifact.ts";
+import { throttleUploadProgress } from "./orchestrator/upload-progress-throttle.ts";
 
 // Orchestrator entrypoint (spec 3): wires every adapter from env config into the
 // running core loop, and serves the HTTP API. Thin — the assembly logic lives
@@ -95,21 +96,28 @@ const resolver: ArtifactResolver = (job) => {
   };
 };
 const printerFtps = { host: PRINTER_HOST, port: PRINTER_FTPS_PORT, accessCode: PRINTER_ACCESS_CODE };
+// Upload-progress indicator (SSE-only, never through Notifier — see
+// sse-notifier.ts). Created before `printer` so its onUploadProgress can push
+// straight to the broadcaster.
+const sse = new SseBroadcaster();
 const printer = new MqttFtpsPrinter(
   mqtt,
   printerFtps,
   resolver,
-  // spec 6/19 + INV-MQTT-02: after stop, send the dedicated eject job (homing +
-  // the same swap sequence the profile bakes in) to return the mechanism to a
-  // safe state. Bytes are deterministic for a given snippet.
-  { ejectArtifact: () => buildEjectThreemf(SWAP_SNIPPET) },
+  {
+    // spec 6/19 + INV-MQTT-02: after stop, send the dedicated eject job (homing +
+    // the same swap sequence the profile bakes in) to return the mechanism to a
+    // safe state. Bytes are deterministic for a given snippet.
+    ejectArtifact: () => buildEjectThreemf(SWAP_SNIPPET),
+    // Already throttled inside MqttFtpsPrinter — forward straight to SSE.
+    onUploadProgress: (context, p) => sse.sendUploadProgress({ context, ...p }),
+  },
 );
 
 // printfarm/* gateway is opt-in: only built when MOSQUITTO_URL is set, so
 // dev/test runs without a local Mosquitto broker don't attempt (and spam-log)
 // a connection to a broker that isn't there.
 const gateway = MOSQUITTO_URL ? new PrintfarmGateway(new MqttPublisherClient(MOSQUITTO_URL)) : undefined;
-const sse = new SseBroadcaster();
 const notifiers: Notifier[] = [sse];
 if (gateway) notifiers.push(gateway);
 if (DISCORD_WEBHOOK_URL) {
@@ -145,7 +153,13 @@ async function startDryRun(): Promise<void> {
     throw new Error(`refusing dry-rehearsal: ${unsafe.length} unsafe line(s) (heater/E-axis, INV-DRY-01/02)`);
   }
   const bytes = packageGcodeThreemf(gcode);
-  await uploadBytes(printerFtps, bytes, printerUploadPath(DRY_REHEARSAL_ARTIFACT));
+  // Upload-progress indicator (Stage 5 live bar, verify.js): a fresh throttle
+  // per call, matching this one transfer's lifetime.
+  const onProgress = throttleUploadProgress(
+    (p) => sse.sendUploadProgress({ context: "dry-rehearsal", ...p }),
+    systemClock,
+  );
+  await uploadBytes({ ...printerFtps, onProgress }, bytes, printerUploadPath(DRY_REHEARSAL_ARTIFACT));
   mqtt.publishProjectFile({
     param: "Metadata/plate_1.gcode",
     url: `ftp:///cache/${DRY_REHEARSAL_ARTIFACT}`,

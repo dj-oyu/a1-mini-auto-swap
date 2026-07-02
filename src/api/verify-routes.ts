@@ -331,6 +331,13 @@ function dryRunBody(): Html {
     <div class="safety-list">${boxes}</div>
     <button id="verifyDryRun" class="act primary" disabled>ドライリハーサルを実行</button>
     <p id="verifyDryMsg" class="muted"></p>
+    <div id="verifyUploadLive" class="dry-live" data-upload-live hidden>
+      <div class="printing-head">
+        <span class="badge blue">送信</span>
+        <span data-upload-msg>—</span>
+      </div>
+      <div class="progressbar"><div class="prog-bar" style="width:0%"></div></div>
+    </div>
     <div id="verifyDryLive" class="dry-live" data-dry-live>
       <div class="printing-head">
         <span class="badge blue">状態</span>

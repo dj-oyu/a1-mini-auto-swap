@@ -634,6 +634,7 @@ function renderDashboard(data: DashboardData): Html {
     <h1>印刷キュー</h1>
     ${nav("queue")}
     <span id="connChip" class="conn-chip" hidden>接続が切れました。表示が古い可能性があります</span>
+    <span id="uploadChip" class="upload-chip" hidden></span>
     <div class="upload-wrap">
       <label class="upload" id="dropzone">
         <input type="file" accept=".gcode.3mf,.3mf" hidden id="fileInput" />
