@@ -176,13 +176,16 @@ function ensureContext(el) {
   // recolor hooks: the confirm modal calls these when the AMS slot mapping /
   // colours change, so the preview re-paints live (spec 17 §9).
   el.__setColor = (hex) => {
-    if (hex) forEachMaterial(ctx, (m) => m.color.set(sanitizeHex(hex)));
+    // Painted (per-triangle vertexColors) meshes ignore the single-colour tint —
+    // their material is white and colour lives in the per-vertex attribute.
+    if (hex && !ctx.triExtruder) forEachMaterial(ctx, (m) => m.color.set(sanitizeHex(hex)));
     ctx.render();
   };
-  // Re-colour per object by a fresh 0-based filament palette (extruder → colour).
+  // Re-colour by a fresh 0-based filament palette. Painted plates repaint their
+  // per-vertex colours; otherwise re-colour per object group.
   el.__setPalette = (colours) => {
     if (Array.isArray(colours) && colours.length) ctx.palette = colours;
-    recolorGroups(ctx);
+    if (!recolorPainted(ctx)) recolorGroups(ctx);
     ctx.render();
   };
 
@@ -202,6 +205,34 @@ function sanitizeHex(hex) {
 function colorForExtruder(extruder, palette, fallback) {
   if (extruder != null && palette && palette[extruder - 1]) return sanitizeHex(palette[extruder - 1]);
   return sanitizeHex(fallback);
+}
+
+/** Stage 3: write a per-vertex `color` attribute from a per-TRIANGLE filament
+ *  index list (`triExtruder`, 1-based; 0 ⇒ fallback). Painted sub-triangles own
+ *  fresh vertices so there is no cross-triangle colour bleed. */
+function applyTriColors(geo, indices, triExtruder, palette, fallback) {
+  const posAttr = geo.getAttribute("position");
+  const colors = new Float32Array(posAttr.count * 3);
+  const c = new THREE.Color();
+  for (let t = 0; t < triExtruder.length; t++) {
+    c.set(colorForExtruder(triExtruder[t], palette, fallback));
+    for (let k = 0; k < 3; k++) {
+      const vi = indices[t * 3 + k];
+      colors[vi * 3] = c.r;
+      colors[vi * 3 + 1] = c.g;
+      colors[vi * 3 + 2] = c.b;
+    }
+  }
+  geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  geo.getAttribute("color").needsUpdate = true;
+}
+
+/** Re-run per-triangle painting on a palette change (painted plates only). */
+function recolorPainted(ctx) {
+  const mesh = ctx.mesh;
+  if (!mesh || !ctx.triExtruder || !mesh.geometry.index) return false;
+  applyTriColors(mesh.geometry, mesh.geometry.index.array, ctx.triExtruder, ctx.palette, ctx.fallback);
+  return true;
 }
 
 function makeMaterial(hex) {
@@ -254,13 +285,23 @@ function setGeometry(ctx, el, data) {
   const fallback = el.getAttribute("data-color") || DEFAULT_COLOR;
   const palette = data.filamentColours || [];
   const groups = data.groups || [];
+  const triExtruder = data.triExtruder || null;
   ctx.groups = groups;
   ctx.palette = palette;
   ctx.fallback = fallback;
+  ctx.triExtruder = triExtruder;
 
   let material;
-  const canGroupColour = groups.length > 0 && groups.every((g) => g.count > 0);
-  if (canGroupColour) {
+  // Stage 3: per-triangle `paint_color` colouring. Each triangle owns a filament
+  // index; paint it via a per-vertex `color` attribute + a vertexColors material
+  // (one draw, no per-object materials). Painted plates only.
+  const canPaintColour = Array.isArray(triExtruder) && triExtruder.length > 0;
+  const canGroupColour = !canPaintColour && groups.length > 0 && groups.every((g) => g.count > 0);
+  if (canPaintColour) {
+    applyTriColors(geo, data.indices || [], triExtruder, palette, fallback);
+    material = makeMaterial("#ffffff");
+    material.vertexColors = true;
+  } else if (canGroupColour) {
     // one material per object; THREE renders each addGroup range with materials[i]
     material = groups.map((g) => makeMaterial(colorForExtruder(g.extruder, palette, fallback)));
     groups.forEach((g, i) => geo.addGroup(g.start, g.count, i));

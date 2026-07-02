@@ -1,4 +1,5 @@
 import { strFromU8, unzipSync } from "fflate";
+import { decodePaintColor } from "./paint-color.ts";
 
 // 3MF mesh extraction for the 3D preview (spec 17 §9 / MVP #6). Parses the
 // `<mesh>` geometry out of every `*.model` part in the archive and merges it
@@ -79,7 +80,7 @@ function mergeAllMeshesUntransformed(files: Record<string, Uint8Array>): Mesh | 
     const meshRe = /<mesh\b[^>]*>([\s\S]*?)<\/mesh>/g;
     let mesh: RegExpExecArray | null;
     while ((mesh = meshRe.exec(xml)) !== null) {
-      pushMesh(mesh[1]!, positions, indices, []);
+      pushMesh(mesh[1]!, positions, indices, [], null, 0);
     }
   }
 
@@ -118,6 +119,17 @@ export interface PlateMesh {
   /** 0-based filament palette (`#RRGGBB`) from project_settings.config, so the
    *  client can colour each group by extruder and re-colour on slot changes. */
   filamentColours: string[];
+  /**
+   * STAGE 3: per-OUTPUT-triangle filament index (1-based), one entry per triangle
+   * in `indices` (i.e. `indices.length / 3` entries). Present ONLY when the plate
+   * has `paint_color` multi-material painting — a painted triangle is subdivided
+   * into coloured sub-triangles (see decodePaintColor) and each carries its own
+   * filament; unpainted triangles carry their object's base extruder. `0` means
+   * "unknown base" (viewer falls back). When absent the output is byte-identical
+   * to stage 2 and the viewer colours per-`groups` instead. Colour of a triangle
+   * = `filamentColours[triExtruder[i]-1]`.
+   */
+  triExtruder?: number[];
 }
 
 /** Read a string attribute from a start tag (colon-safe, e.g. "p:path"). */
@@ -261,13 +273,41 @@ function findMeshBody(xml: string, objectid: number | null): string | null {
   return mm ? mm[1]! : null;
 }
 
+/**
+ * Per-plate paint context (stage 3). Threaded through mesh assembly so each
+ * `paint_color` triangle is expanded into coloured sub-triangles and every
+ * output triangle records its filament in `triExtruder`. Only created when the
+ * plate actually carries painting, so unpainted plates pay ZERO extra cost.
+ */
+interface PaintCtx {
+  /** one 1-based filament index per output triangle (0 ⇒ unknown base). */
+  triExtruder: number[];
+  /** set true once at least one triangle decoded cleanly (⇒ attach triExtruder). */
+  painted: boolean;
+  /** decode telemetry (validation / growth reporting). */
+  stats: { strings: number; clean: number; failed: number; leaves: number; emitted: number; maxState: number };
+}
+
+/** Read the 3 (already-transformed) corner positions of a just-pushed triangle. */
+function cornerAt(positions: number[], vi: number): [number, number, number] {
+  return [positions[vi * 3]!, positions[vi * 3 + 1]!, positions[vi * 3 + 2]!];
+}
+
 /** Parse a <mesh> body, apply `transforms` (in order) to each vertex, and
- *  append the result to `positions`/`indices`. Returns triangles appended. */
+ *  append the result to `positions`/`indices`. Returns triangles appended.
+ *
+ *  When `paint` is non-null, a triangle carrying a `paint_color` attribute is
+ *  decoded into coloured sub-triangles (fresh, un-indexed vertices) and each
+ *  output triangle's filament is recorded in `paint.triExtruder`; unpainted
+ *  triangles record `baseExtruder`. When `paint` is null the original indexed
+ *  behaviour is preserved exactly (whole-archive /model path). */
 function pushMesh(
   body: string,
   positions: number[],
   indices: number[],
   transforms: (number[] | null)[],
+  paint: PaintCtx | null,
+  baseExtruder: number,
 ): number {
   const base = positions.length / 3;
   const verts = /<vertices\b[^>]*>([\s\S]*?)<\/vertices>/.exec(body);
@@ -295,8 +335,48 @@ function pushMesh(
       const c = intAttr(t[0], "v3");
       if (a == null || b == null || c == null) continue;
       if (a >= added || b >= added || c >= added) continue;
-      indices.push(base + a, base + b, base + c);
-      tris++;
+
+      const pc = paint ? strAttr(t[0], "paint_color") : null;
+      if (paint && pc) {
+        // Painted: subdivide into coloured sub-triangles (fresh vertices).
+        const p0 = cornerAt(positions, base + a);
+        const p1 = cornerAt(positions, base + b);
+        const p2 = cornerAt(positions, base + c);
+        const before = tris;
+        const st = decodePaintColor(p0, p1, p2, pc, baseExtruder, (sub, ext) => {
+          const vbase = positions.length / 3;
+          positions.push(sub[0]!, sub[1]!, sub[2]!, sub[3]!, sub[4]!, sub[5]!, sub[6]!, sub[7]!, sub[8]!);
+          indices.push(vbase, vbase + 1, vbase + 2);
+          paint.triExtruder.push(ext);
+          tris++;
+        });
+        paint.stats.strings++;
+        paint.stats.leaves += st.leaves;
+        paint.stats.emitted += st.emitted;
+        if (st.maxState > paint.stats.maxState) paint.stats.maxState = st.maxState;
+        if (st.ok) {
+          paint.stats.clean++;
+          paint.painted = true;
+        } else {
+          // Malformed/short string: undo any partial sub-triangles and fall back
+          // to the flat base-coloured triangle so the mesh never corrupts.
+          paint.stats.failed++;
+          const undo = tris - before;
+          if (undo > 0) {
+            positions.length -= undo * 9;
+            indices.length -= undo * 3;
+            paint.triExtruder.length -= undo;
+            tris = before;
+          }
+          indices.push(base + a, base + b, base + c);
+          paint.triExtruder.push(baseExtruder);
+          tris++;
+        }
+      } else {
+        indices.push(base + a, base + b, base + c);
+        if (paint) paint.triExtruder.push(baseExtruder);
+        tris++;
+      }
     }
   }
   return tris;
@@ -316,11 +396,16 @@ interface Scene {
  * when the archive has no `<build>` (⇒ caller falls back) or yields no geometry.
  *
  * `targetObjectIds`: the build object ids to include; `null` ⇒ every build item.
+ * `paint`: stage-3 paint context (null ⇒ no per-triangle segmentation, e.g. the
+ * whole-archive /model path). `baseExtruderOf`: object id → 1-based base extruder
+ * (0 when unknown), used both for group colouring and as the paint state-0 base.
  */
 function assembleScene(
   root: ReturnType<typeof parseRootModel>,
   parts: Record<string, Uint8Array>,
   targetObjectIds: number[] | null,
+  paint: PaintCtx | null = null,
+  baseExtruderOf: (oid: number) => number = () => 0,
 ): Scene | null {
   if (root.build.size === 0) return null; // no production-extension build
   const targetIds = targetObjectIds ?? [...root.build.keys()];
@@ -333,8 +418,9 @@ function assembleScene(
     const res = root.resources.get(oid);
     if (!res) continue;
     const itemT = root.build.get(oid) ?? null;
+    const baseExt = baseExtruderOf(oid);
     const start = indices.length;
-    if (res.inlineMesh) pushMesh(res.inlineMesh, positions, indices, [itemT]);
+    if (res.inlineMesh) pushMesh(res.inlineMesh, positions, indices, [itemT], paint, baseExt);
     for (const comp of res.components) {
       const bytes = parts[comp.path];
       if (!bytes) continue;
@@ -344,7 +430,7 @@ function assembleScene(
       } catch {
         continue;
       }
-      if (body) pushMesh(body, positions, indices, [comp.transform, itemT]);
+      if (body) pushMesh(body, positions, indices, [comp.transform, itemT], paint, baseExt);
     }
     if (indices.length > start) {
       groups.push({ objectId: oid, extruder: null, start, count: indices.length - start });
@@ -426,12 +512,23 @@ export function extractPlateMesh(threemf: Buffer, plateId: string): PlateMesh | 
     }
   }
 
-  const scene = assembleScene(root, parts, targetIds);
+  // Colouring (stage 2): resolve each object's base extruder from model_settings.
+  // Needed BEFORE assembly so stage-3 paint decoding can resolve state-0 regions
+  // to the object's base filament.
+  const extruders = settings ? parseObjectExtruders(strFromU8(settings)) : new Map<number, number>();
+  const baseExtruderOf = (oid: number): number => extruders.get(oid) ?? 0;
+
+  // Stage 3: only enable per-triangle paint decoding when the plate's geometry
+  // actually carries `paint_color` — an unpainted plate then produces output
+  // byte-identical to stage 2 (no triExtruder, no extra vertices/cost).
+  const painted = Object.values(parts).some(bytesIncludePaintColor);
+  const paint: PaintCtx | null = painted
+    ? { triExtruder: [], painted: false, stats: { strings: 0, clean: 0, failed: 0, leaves: 0, emitted: 0, maxState: 0 } }
+    : null;
+
+  const scene = assembleScene(root, parts, targetIds, paint, baseExtruderOf);
   if (!scene) return null;
 
-  // Colouring (stage 2): resolve each object's base extruder from model_settings
-  // and expose the filament palette so the viewer can paint per-object.
-  const extruders = settings ? parseObjectExtruders(strFromU8(settings)) : new Map<number, number>();
   for (const g of scene.groups) g.extruder = extruders.get(g.objectId) ?? null;
   const filamentColours = parseFilamentColours(head["Metadata/project_settings.config"]);
 
@@ -441,5 +538,23 @@ export function extractPlateMesh(threemf: Buffer, plateId: string): PlateMesh | 
     bbox: computeBbox(scene.positions),
     groups: scene.groups,
     filamentColours,
+    // Attach only when painting actually occurred (keeps unpainted output stage-2
+    // identical). Length is exactly indices.length/3.
+    ...(paint && paint.painted ? { triExtruder: paint.triExtruder } : {}),
   };
+}
+
+/** UTF-8 substring scan for `paint_color` over raw part bytes — a cheap gate to
+ *  skip all stage-3 work for unpainted plates. */
+const PAINT_NEEDLE = new TextEncoder().encode("paint_color");
+function bytesIncludePaintColor(bytes: Uint8Array): boolean {
+  const n = bytes.length;
+  const m = PAINT_NEEDLE.length;
+  const first = PAINT_NEEDLE[0]!;
+  outer: for (let i = 0; i + m <= n; i++) {
+    if (bytes[i] !== first) continue;
+    for (let j = 1; j < m; j++) if (bytes[i + j] !== PAINT_NEEDLE[j]) continue outer;
+    return true;
+  }
+  return false;
 }
