@@ -192,6 +192,16 @@ async function startDryRun(includeSwap: boolean): Promise<void> {
 }
 
 // ── boot ───────────────────────────────────────────────────────────────────
+// Initialize the stocker on first boot: a fresh DB has no stocker_state row, so
+// the dispatcher would report "stocker_empty" and never print. capacity is a
+// hardware-fixed value (spec 11, Swap Systems 参考値 10); adjust later via
+// POST /api/stocker or the stocker chip. Existing rows are left untouched.
+const STOCKER_CAPACITY = num("STOCKER_CAPACITY", 10);
+if (!repo.getStocker()) {
+  repo.setStocker(STOCKER_CAPACITY, STOCKER_CAPACITY);
+  console.log(`  stocker   initialized: ${STOCKER_CAPACITY}/${STOCKER_CAPACITY} (STOCKER_CAPACITY)`);
+}
+
 await mqtt.connect();
 const orch = createOrchestrator({
   repo,
@@ -201,6 +211,11 @@ const orch = createOrchestrator({
   status: mqtt,
   lowStockThreshold: num("STOCKER_LOW_THRESHOLD", 1),
 });
+
+// Resume any job left 'queued' by a previous run (crash/restart recovery):
+// dispatchNext no-ops on an idle-with-empty-queue boot, and reverts to queued
+// if the start fails, so this is safe to fire unconditionally.
+void orch.dispatcher.dispatchNext().catch((e) => console.warn(`[boot] dispatch: ${(e as Error).message}`));
 
 // spec 13 escalation: re-notify unresolved blocking_queue pending actions every
 // ESCALATION_INTERVAL_MIN until a human resolves them (INV-PENDING-03/05).

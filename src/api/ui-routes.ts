@@ -86,6 +86,9 @@ export function createUiApp(repo: Repo): Hono {
     return c.html(renderConfirmPanel(job, repo.listProjects()));
   });
 
+  // GET /ui/stocker/config — the stocker capacity config modal (spec 11).
+  app.get("/ui/stocker/config", (c) => c.html(renderStockerConfig(repo.getStocker())));
+
   // GET /ui/snapshot — the camera modal (spec 17 §5). The <img> points at the
   // snapshot API; 更新 re-fetches with a cache-buster (see app.js).
   app.get("/ui/snapshot", (c) => c.html(renderSnapshotPanel()));
@@ -451,10 +454,34 @@ function pendingBanner(pending: PendingActionRow[]): Html {
   `;
 }
 
+/** Stocker chip — click to open the capacity config modal (spec 11). */
 function stockerChip(stocker: StockerRow | null): Html {
-  if (!stocker) return html`<span class="chip warn">ストッカー未設定</span>`;
+  if (!stocker) {
+    return html`<button class="chip warn" hx-get="/ui/stocker/config" hx-target="#modal" hx-swap="innerHTML">ストッカー未設定（設定）</button>`;
+  }
   const low = stocker.remaining === 0 ? "red" : stocker.remaining <= 1 ? "amber" : "ok";
-  return html`<span class="chip ${low}">プレート ${stocker.remaining}/${stocker.capacity}</span>`;
+  return html`<button class="chip ${low}" hx-get="/ui/stocker/config" hx-target="#modal" hx-swap="innerHTML" title="容量を設定">プレート ${stocker.remaining}/${stocker.capacity}</button>`;
+}
+
+/** Stocker capacity config modal (spec 11): set the hardware plate count. */
+function renderStockerConfig(stocker: StockerRow | null): Html {
+  const cap = stocker?.capacity ?? 10;
+  return html`
+    <div class="modal-overlay" data-close>
+      <div class="modal-box" role="dialog" aria-modal="true" tabindex="-1">
+        <h2 class="modal-title">ストッカー容量</h2>
+        <p class="muted">自動交換機構に積めるビルドプレートの枚数（ハードウェア固有値、spec 11）。設定すると残数もこの値にリセットされます。</p>
+        <label class="fil-row">
+          <span class="fil-slot">容量（枚）</span>
+          <input type="number" min="1" max="100" value="${cap}" data-stocker-capacity />
+        </label>
+        <div class="modal-actions">
+          <button class="act" data-close>キャンセル</button>
+          <button class="act primary" data-stocker-set>保存</button>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 /** SQLite stores datetime('now') as "YYYY-MM-DD HH:MM:SS" in UTC (no tz). Turn

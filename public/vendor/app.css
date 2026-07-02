@@ -65,7 +65,7 @@
   .pending .act[hx-post*="stocker"]{border-color:var(--amber);color:var(--amber)}
   .card-confirm{margin-left:auto}
   .modal-overlay{position:fixed;inset:0;background:rgba(17,24,40,.45);display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}
-  .modal-box{background:var(--card);border-radius:14px;padding:20px;max-width:460px;width:100%;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+  .modal-box{background:var(--card);border-radius:14px;padding:20px;max-width:460px;width:100%;box-shadow:0 12px 40px rgba(0,0,0,.25);max-height:90vh;overflow-y:auto}
   .modal-box.error{outline:2px solid var(--red)}
   .modal-title{margin:0 0 2px;font-size:17px}
   .muted{color:var(--muted);font-size:13px;margin:0 0 12px}

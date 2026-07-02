@@ -145,6 +145,26 @@
 
       // camera modal is a live MJPEG stream now — no manual 更新 needed.
 
+      // stocker config: save capacity → POST /api/stocker → close + refresh
+      var stockerSet = e.target.closest && e.target.closest('[data-stocker-set]');
+      if (stockerSet) {
+        var sbox = stockerSet.closest('.modal-box');
+        var sinput = sbox && sbox.querySelector('[data-stocker-capacity]');
+        var cap = sinput ? Number(sinput.value) : NaN;
+        if (!(cap >= 1)) { if (sbox) sbox.classList.add('error'); return; }
+        stockerSet.disabled = true;
+        fetch('/api/stocker', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ capacity: cap }),
+        }).then(function (r) {
+          stockerSet.disabled = false;
+          if (r.ok) { closeModal(); refresh(); }
+          else if (sbox) sbox.classList.add('error');
+        }).catch(function () { stockerSet.disabled = false; if (sbox) sbox.classList.add('error'); });
+        return;
+      }
+
       // card action: reorder (↑/↓) — swap with the adjacent card, persist order
       var up = e.target.closest && e.target.closest('[data-move-up]');
       var down = e.target.closest && e.target.closest('[data-move-down]');
