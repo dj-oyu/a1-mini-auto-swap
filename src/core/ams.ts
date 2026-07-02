@@ -2,6 +2,8 @@
 // domain service so the "does the loaded AMS satisfy the job's demand" rule
 // lives in one place (used by confirm-filaments auto-queue, runout Tier checks).
 
+import { sameColor } from "./color.ts";
+
 export interface FilamentReq {
   slot: number;
   color: string;
@@ -19,6 +21,6 @@ export interface LoadedTray {
  *  (INV-PENDING-01). */
 export function amsMatches(required: FilamentReq[], loaded: LoadedTray[]): boolean {
   return required.every((r) =>
-    loaded.some((t) => t.slot === r.slot && t.color === r.color && t.type === r.type),
+    loaded.some((t) => t.slot === r.slot && sameColor(t.color, r.color) && t.type === r.type),
   );
 }

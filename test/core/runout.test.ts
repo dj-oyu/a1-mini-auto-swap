@@ -30,6 +30,27 @@ describe("resolveRunout (spec 14)", () => {
     expect(r).toEqual({ kind: "switch", toSlot: 2, substitutedColor: null });
   });
 
+  test("same_color_only matches across color notations — AMS 'RRGGBBAA' wire form vs 3MF '#RRGGBB' (INV-RUNOUT-03)", () => {
+    const r = resolveRunout(
+      ctx("same_color_only", [
+        { slot: 0, color: "#FF0000", type: "PLA", remaining_g: 0 },
+        { slot: 1, color: "FF0000FF", type: "PLA", remaining_g: 800 }, // same red, wire notation
+      ]),
+    );
+    expect(r).toEqual({ kind: "switch", toSlot: 1, substitutedColor: null });
+  });
+
+  test("allow_material_match does NOT record a substitution when only the notation differs (INV-RUNOUT-06)", () => {
+    const r = resolveRunout(
+      ctx("allow_material_match", [
+        { slot: 0, color: "#FF0000", type: "PLA", remaining_g: 0 },
+        { slot: 1, color: "ff0000", type: "PLA", remaining_g: 800 }, // same red, different case/#
+      ]),
+    );
+    // same actual color => no false ⚠色代替 flag
+    expect(r).toEqual({ kind: "switch", toSlot: 1, substitutedColor: null });
+  });
+
   test("same_color_only with no same-color alt => pending (INV-RUNOUT-05)", () => {
     const r = resolveRunout(
       ctx("same_color_only", [

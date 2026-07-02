@@ -72,19 +72,16 @@ describe("amsMatches (spec 13 filament_confirm)", () => {
     expect(amsMatches(required, loaded)).toBe(false);
   });
 
-  // SUSPECT: amsMatches uses strict string equality on `color`, so case and
-  // "#"-prefix differences (e.g. "#ff0000" vs "#FF0000", or "FF0000" vs
-  // "#FF0000") are treated as a mismatch. This test pins that current
-  // behavior; if upstream gcode/AMS color strings are not normalized to a
-  // single canonical form before calling amsMatches, this could produce
-  // spurious blocking_job escalations (INV-PENDING-02) for what a human
-  // would consider the same color.
-  test("color string case/format variance is NOT normalized — differing case is a mismatch (characterization, see SUSPECT above)", () => {
+  // Resolves the former // SUSPECT: colors are now compared via
+  // normalizeColor (core/color.ts), so notation variance between the 3MF
+  // ("#RRGGBB") and the AMS wire ("RRGGBBAA", docs/bambu-protocol-notes.md)
+  // no longer causes spurious blocking_job escalations (INV-PENDING-01/02).
+  test("color notation variance (case / '#' / AMS alpha suffix) still counts as a match", () => {
     const required: FilamentReq[] = [{ slot: 0, color: "#FF0000", type: "PLA" }];
-    const loadedLowercase: LoadedTray[] = [{ slot: 0, color: "#ff0000", type: "PLA" }];
-    expect(amsMatches(required, loadedLowercase)).toBe(false);
-
-    const loadedNoHash: LoadedTray[] = [{ slot: 0, color: "FF0000", type: "PLA" }];
-    expect(amsMatches(required, loadedNoHash)).toBe(false);
+    expect(amsMatches(required, [{ slot: 0, color: "#ff0000", type: "PLA" }])).toBe(true);
+    expect(amsMatches(required, [{ slot: 0, color: "FF0000", type: "PLA" }])).toBe(true);
+    expect(amsMatches(required, [{ slot: 0, color: "FF0000FF", type: "PLA" }])).toBe(true);
+    // a genuinely different color is still a mismatch
+    expect(amsMatches(required, [{ slot: 0, color: "#FF0001", type: "PLA" }])).toBe(false);
   });
 });
