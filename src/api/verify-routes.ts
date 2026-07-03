@@ -564,12 +564,13 @@ function tempPhotoSection(deps: VerifyDeps): Html {
   `;
 }
 
-function nav(active: "queue" | "projects" | "verify"): Html {
+function nav(active: "queue" | "projects" | "verify" | "logs"): Html {
   const cls = (k: string) => (k === active ? "navlink active" : "navlink");
   return html`<nav class="nav">
     <a class="${cls("queue")}" href="/">キュー</a>
     <a class="${cls("projects")}" href="/projects">プロジェクト</a>
     <a class="${cls("verify")}" href="/verify">実機検証</a>
+    <a class="${cls("logs")}" href="/logs">ログ</a>
   </nav>`;
 }
 

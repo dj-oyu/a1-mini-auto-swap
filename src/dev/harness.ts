@@ -13,6 +13,7 @@ import { createSnapshotApp } from "../api/snapshot-routes.ts";
 import { createCameraApp } from "../api/camera-routes.ts";
 import { relaySnapshotSource, type FrameRelay } from "../orchestrator/camera-relay.ts";
 import { createUiApp } from "../api/ui-routes.ts";
+import { createLogsApp } from "../api/logs-routes.ts";
 import { createVerifyApp } from "../api/verify-routes.ts";
 import { createEventsApp } from "../api/events-routes.ts";
 import { createAuth, createLoginApp } from "../api/auth.ts";
@@ -114,6 +115,17 @@ const cameraRelay = new DevCameraRelay();
 app.route("/", createSnapshotApp({ source: relaySnapshotSource(cameraRelay) }));
 app.route("/", createCameraApp({ relay: cameraRelay }));
 app.route("/", createUiApp({ repo, cacheDir }));
+// Log viewer (task #24): the in-memory harness writes no audit files itself, but
+// mounting the route lets the UI be developed against ./data/logs if a real
+// orchestrator run has populated it (else the viewer just shows「ログがありません」).
+app.route(
+  "/",
+  createLogsApp({
+    logDir: process.env.LOG_DIR ?? "./data/logs",
+    mqttLogDir: process.env.MQTT_LOG_DIR ?? "./data/mqtt-log",
+    mqttLogEnabled: process.env.MQTT_LOG === "1",
+  }),
+);
 // 実機検証ガイド (/verify): fake deps that succeed immediately, so the whole page
 // works with no printer/broker. runDiagnostics reports an all-green probe with a
 // PROT C fallback (the A1's ★ unverified case); printerStatus is IDLE so the
