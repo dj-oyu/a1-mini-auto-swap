@@ -26,12 +26,78 @@ export interface CurlUploadOptions {
   accessCode: string;
   username?: string; // default "bblp"
   onProgress?: (p: UploadProgressSample) => void;
-  /** Overall transfer deadline, default 120s (large plates + retries). */
+  /** Floor for `--max-time`, and an explicit override when a caller wants a
+   *  larger hard ceiling. Default 120s. The real early-abort is the stall
+   *  guard (`--speed-limit`/`--speed-time`), not this — see buildCurlArgs. */
   timeoutMs?: number;
+  /** curl `--speed-limit` (bytes/s). Below this for `speedTimeSeconds`
+   *  continuous seconds → curl aborts. Default 1024 (1 KB/s). */
+  speedLimitBytesPerSec?: number;
+  /** curl `--speed-time` (seconds) — the stall window paired with
+   *  `speedLimitBytesPerSec`. Default 30s. */
+  speedTimeSeconds?: number;
+  /** Conservative throughput floor (bytes/s) used to size `--max-time` from the
+   *  payload length. Default 40_000 (40 KB/s). Overridable so tests can exercise
+   *  the size-aware ceiling with a small stand-in buffer. */
+  floorBytesPerSec?: number;
   /** Abort the in-flight upload (kills curl). */
   signal?: AbortSignal;
   /** Override the curl binary (tests / non-PATH installs). Default "curl". */
   curlPath?: string;
+}
+
+/** Default stall guard: abort only if throughput stays under 1 KB/s for 30
+ *  continuous seconds. A healthy ~130 KB/s A1 transfer never trips this; a dead
+ *  connection aborts in ~30s. */
+export const DEFAULT_SPEED_LIMIT_BYTES_PER_SEC = 1024;
+export const DEFAULT_SPEED_TIME_SECONDS = 30;
+/** Conservative throughput floor for sizing the hard `--max-time` ceiling. */
+export const DEFAULT_FLOOR_BYTES_PER_SEC = 40_000;
+/** Slack added on top of the size-derived ceiling for TLS/PASV handshake. */
+export const HANDSHAKE_MARGIN_MS = 30_000;
+export const DEFAULT_TIMEOUT_MS = 120_000;
+
+/**
+ * Build the curl argv for an upload. Pure (no I/O) so it is unit-testable
+ * without a network or wall-clock. The credential file (`-K`) is referenced by
+ * path only — the access code never appears here.
+ *
+ * Timeout strategy — fixes the real-hardware bug where a 22 MB `.gcode.3mf` at
+ * the A1's measured ~130 KB/s needs ~170s but a flat `--max-time 120` killed the
+ * transfer at ~67% (~16 MB), so the gcode never fully reached the printer and
+ * the print never started:
+ *  - `--speed-limit`/`--speed-time` are the real early-abort: they fire only on
+ *    a genuine stall (throughput under the limit for the whole window), so a
+ *    slow-but-progressing upload of ANY size completes.
+ *  - `--max-time` is a SIZE-AWARE backstop, not a flat deadline: derived from
+ *    the payload length assuming a pessimistic throughput floor, so a 22 MB file
+ *    gets a ~580s ceiling (22e6/40e3 = 550s + 30s margin) while a tiny file
+ *    keeps the 120s floor. `opts.timeoutMs` is an explicit floor/override,
+ *    never a cap.
+ */
+export function buildCurlArgs(
+  cfgPath: string,
+  url: string,
+  dataLength: number,
+  opts: CurlUploadOptions,
+): string[] {
+  const speedLimit = opts.speedLimitBytesPerSec ?? DEFAULT_SPEED_LIMIT_BYTES_PER_SEC;
+  const speedTime = opts.speedTimeSeconds ?? DEFAULT_SPEED_TIME_SECONDS;
+  const floor = opts.floorBytesPerSec ?? DEFAULT_FLOOR_BYTES_PER_SEC;
+  const sizeMs = (dataLength / floor) * 1000;
+  const effectiveMaxMs = Math.max(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, sizeMs + HANDSHAKE_MARGIN_MS);
+  return [
+    "-K", cfgPath, // credentials (off argv)
+    "-k", // self-signed printer cert (spec 2)
+    "--ssl-reqd", // require TLS on the control channel (implicit FTPS)
+    "--disable-epsv", // A1 rejects EPSV (502, 実測) — force PASV
+    "-T", "-", // upload payload from stdin (we stream → progress)
+    "-sS", // quiet but show errors
+    "--speed-limit", String(speedLimit), // stall guard: bytes/s floor…
+    "--speed-time", String(speedTime), // …sustained this many seconds → abort
+    "--max-time", String(Math.ceil(effectiveMaxMs / 1000)), // size-aware hard ceiling
+    url,
+  ];
 }
 
 export class CurlNotFoundError extends Error {
@@ -57,7 +123,6 @@ export function uploadViaCurl(
 function runCurl(data: Buffer, remotePath: string, opts: CurlUploadOptions): Promise<void> {
   const curlBin = opts.curlPath ?? "curl";
   const user = opts.username ?? "bblp";
-  const timeoutMs = opts.timeoutMs ?? 120_000;
   const url = `ftps://${opts.host}:${opts.port}${remotePath.startsWith("/") ? "" : "/"}${remotePath}`;
 
   // Credentials via a 0600 config file (curl -K), never on argv/env.
@@ -66,16 +131,7 @@ function runCurl(data: Buffer, remotePath: string, opts: CurlUploadOptions): Pro
   writeFileSync(cfgPath, `user = "${user}:${opts.accessCode}"\n`, { mode: 0o600 });
 
   return new Promise<void>((resolve, reject) => {
-    const args = [
-      "-K", cfgPath, // credentials (off argv)
-      "-k", // self-signed printer cert (spec 2)
-      "--ssl-reqd", // require TLS on the control channel (implicit FTPS)
-      "--disable-epsv", // A1 rejects EPSV (502, 実測) — force PASV
-      "-T", "-", // upload payload from stdin (we stream → progress)
-      "-sS", // quiet but show errors
-      "--max-time", String(Math.ceil(timeoutMs / 1000)),
-      url,
-    ];
+    const args = buildCurlArgs(cfgPath, url, data.length, opts);
 
     let child;
     try {
