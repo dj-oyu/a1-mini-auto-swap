@@ -489,6 +489,47 @@
       uploadChipTimer = setTimeout(hideUploadChip, 10000);
     }
 
+    // FTPS upload progress ON THE JOB'S OWN QUEUE CARD (in addition to the header
+    // chip above). Only a "job-<id>" context maps to a card; eject/dry-rehearsal
+    // have no card and are ignored. No-ops gracefully if htmx hasn't rendered the
+    // card yet. The card's .card-progress is server-rendered hidden, so a #dashboard
+    // re-render (htmx afterSwap) naturally clears it back to the resting state.
+    var JOB_CONTEXT = /^job-(\d+)$/;
+    function cardForContext(context) {
+      if (typeof context !== 'string') return null;
+      var m = JOB_CONTEXT.exec(context);
+      if (!m) return null; // non-job context (eject, dry-rehearsal, …)
+      return document.querySelector('.card[data-job-id="' + m[1] + '"]');
+    }
+    function resetCardProgress(wrap) {
+      if (!wrap) return;
+      wrap.hidden = true;
+      var bar = wrap.querySelector('[data-card-progress-bar]');
+      if (bar) bar.style.width = '0%';
+      var label = wrap.querySelector('[data-card-progress-label]');
+      if (label) label.textContent = '';
+    }
+    function hideAllCardProgress() {
+      var wraps = document.querySelectorAll('[data-card-progress]');
+      for (var i = 0; i < wraps.length; i++) resetCardProgress(wraps[i]);
+    }
+    function updateCardUpload(p) {
+      if (!p) return;
+      var card = cardForContext(p.context);
+      if (!card) return; // non-job context, or card not rendered yet
+      var wrap = card.querySelector('[data-card-progress]');
+      if (!wrap) return;
+      var sent = Number(p.bytesSent) || 0;
+      var total = Number(p.totalBytes) || 0;
+      if (total > 0 && sent >= total) { resetCardProgress(wrap); return; } // done → hide
+      var pct = total > 0 ? Math.floor((sent / total) * 100) : 0;
+      var bar = wrap.querySelector('[data-card-progress-bar]');
+      if (bar) bar.style.width = pct + '%';
+      var label = wrap.querySelector('[data-card-progress-label]');
+      if (label) label.textContent = '⇪ 送信中 ' + pct + '%';
+      wrap.hidden = false;
+    }
+
     if (!window.EventSource) {
       setInterval(pollStatus, 15000); // no SSE → fall back to polling the header
       return;
@@ -498,8 +539,11 @@
     ['job_started','job_finished','job_failed','aborted','stocker_low','waiting_for_refill','pending_action','filament_switched','timeout']
       .forEach(function (t) { es.addEventListener(t, refresh); });
     // a failed/aborted dispatch means no completion upload_progress sample is
-    // coming — drop the chip immediately instead of waiting for the timeout.
-    ['job_failed', 'aborted'].forEach(function (t) { es.addEventListener(t, hideUploadChip); });
+    // coming — drop the chip AND any card bars immediately instead of waiting.
+    ['job_failed', 'aborted'].forEach(function (t) {
+      es.addEventListener(t, hideUploadChip);
+      es.addEventListener(t, hideAllCardProgress);
+    });
     // build-plate low: pop a toast the moment the last plate is on the bed
     es.addEventListener('stocker_low', function (e) {
       try { showToast(JSON.parse(e.data).message || 'ビルドプレート残りわずか'); } catch (_) {}
@@ -510,6 +554,10 @@
       updatePrinting();
     });
     es.addEventListener('upload_progress', function (e) {
-      try { showUploadChip(JSON.parse(e.data)); } catch (_) {}
+      try {
+        var p = JSON.parse(e.data);
+        showUploadChip(p);   // header chip (unchanged)
+        updateCardUpload(p); // and the specific job's queue card
+      } catch (_) {}
     });
   })();

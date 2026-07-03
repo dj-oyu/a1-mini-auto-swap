@@ -244,6 +244,54 @@ describe("GET / (dashboard SSR)", () => {
     });
   });
 
+  describe("per-card upload progress (FTPS 送信 on the queue card)", () => {
+    test("every card carries a hidden .card-progress with a bar + label, keyed by data-job-id", async () => {
+      const id = repo.createJob({ filename: "sending.3mf" });
+      repo.updateStatus(id, "queued");
+      const r = await body();
+      // the card is addressable by job id (client maps job-<id> context → card)
+      expect(r.text).toContain(`data-job-id="${id}"`);
+      // the progress element is present but hidden until an upload is in flight
+      expect(r.text).toContain("data-card-progress");
+      expect(r.text).toMatch(/<div class="card-progress" data-card-progress hidden>/);
+      expect(r.text).toContain("data-card-progress-bar");
+      expect(r.text).toContain("data-card-progress-label");
+    });
+
+    test("the client maps a job-<id> upload_progress frame onto that card (not only the header chip)", async () => {
+      const js = await asset("/vendor/app.js");
+      // still updates the header chip …
+      expect(js).toContain("showUploadChip(p)");
+      // … AND now the specific card
+      expect(js).toContain("updateCardUpload(p)");
+      // it selects the card by data-job-id and parses job-<id> from the context
+      expect(js).toContain('.card[data-job-id="');
+      expect(js).toContain("/^job-(\\d+)$/");
+      // it touches the card's progress sub-elements
+      expect(js).toContain("data-card-progress-bar");
+      expect(js).toContain("data-card-progress-label");
+      // and shows the same 送信中 label as the header chip
+      expect(js).toContain("送信中");
+    });
+
+    test("non-job contexts (eject/dry-rehearsal) select no card; failed/aborted clear the bars", async () => {
+      const js = await asset("/vendor/app.js");
+      // cardForContext returns null for a non-matching context → updateCardUpload no-ops
+      expect(js).toContain("cardForContext");
+      expect(js).toMatch(/if\s*\(!m\)\s*return null/); // regex miss → no card
+      // job_failed / aborted drop any in-flight card bars (mirrors the header chip)
+      expect(js).toContain("hideAllCardProgress");
+    });
+
+    test("the CSS gives the card bar a track+fill and keeps [hidden] out of layout", async () => {
+      const css = await asset("/vendor/app.css");
+      expect(css).toContain(".card-progress");
+      expect(css).toContain(".card-progress-bar");
+      // hidden must win over the flex display so an idle card doesn't shift layout
+      expect(css).toContain(".card-progress[hidden]{display:none}");
+    });
+  });
+
   describe("thumbnails (MVP #6)", () => {
     test("queue cards reference the job's thumbnail endpoint and hide it if absent", async () => {
       const id = repo.createJob({ filename: "p.3mf" });

@@ -299,6 +299,14 @@ function jobCard(job: JobRow): Html {
             ? html`<button class="act primary card-confirm" hx-get="/ui/queue/${job.id}/confirm" hx-target="#modal" hx-swap="innerHTML">フィラメント確認</button>`
             : ""}
         </div>
+        <!-- FTPS 送信 (upload) progress for THIS job, driven client-side by the
+             upload_progress SSE frame whose context is "job-<id>" (app.js). Hidden
+             until an upload for this card is in flight; re-rendering the fragment
+             resets it to hidden. Mirrors the header #uploadChip, but on the card. -->
+        <div class="card-progress" data-card-progress hidden>
+          <div class="card-progress-track"><div class="card-progress-bar" data-card-progress-bar></div></div>
+          <span class="card-progress-label" data-card-progress-label></span>
+        </div>
         ${cardActions(job)}
       </div>
     </li>
