@@ -264,7 +264,14 @@ if (printingAtBoot.length > 0) {
 // Resume any job left 'queued' by a previous run (crash/restart recovery):
 // dispatchNext no-ops on an idle-with-empty-queue boot, and reverts to queued
 // if the start fails, so this is safe to fire unconditionally.
-void orch.dispatcher.dispatchNext().catch((e) => console.warn(`[boot] dispatch: ${(e as Error).message}`));
+void orch.dispatcher.dispatchNext().catch((e) =>
+  // Surface a boot-time start failure (e.g. an FTPS upload that rejected) in the
+  // structured app log — the dispatcher already reverted the job to 'queued'.
+  log.warn("boot dispatch start failed, job returned to queue", {
+    event: "dispatch_start_failed",
+    err: e instanceof Error ? e.message : String(e),
+  }),
+);
 
 // spec 13 escalation: re-notify unresolved blocking_queue pending actions every
 // ESCALATION_INTERVAL_MIN until a human resolves them (INV-PENDING-03/05).
