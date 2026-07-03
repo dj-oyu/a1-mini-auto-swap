@@ -122,6 +122,58 @@ export function listPreviewPlates(threemf: Buffer): PreviewPlate[] {
   return listModelSettingsPlates(files);
 }
 
+/** Which read-only 3D preview renderer a cached archive should use. */
+export type PreviewKind = "mesh" | "gcode" | "thumb";
+
+/**
+ * Decide the preview source for a cached archive (Part A 3-tier selection):
+ *  - "mesh":  renderable geometry present — a PROJECT 3mf (inline
+ *    `3D/3dmodel.model` mesh, external `3D/Objects/*.model` parts, or
+ *    `model_settings.config` plater_id plates) → the Three.js mesh viewer
+ *    (`/api/plate-mesh`, `/model`).
+ *  - "gcode": NO mesh, but ≥1 `Metadata/plate_N.gcode` — a sliced, PRINTABLE
+ *    `.gcode.3mf` (Bambu strips the mesh on slice) → the gcode-preview toolpath
+ *    viewer (`/api/queue/:id/gcode`).
+ *  - "thumb": neither → the embedded plate PNG only.
+ *
+ * Only the file LISTING + two small parts are decompressed (fflate `filter`
+ * observes every entry name but inflates only `3D/3dmodel.model` and
+ * `Metadata/model_settings.config`), so a multi-hundred-MB multi-plate archive
+ * is never fully inflated just to pick a renderer. Never throws (→ "thumb").
+ */
+export function previewKind(threemf: Buffer): PreviewKind {
+  const names: string[] = [];
+  let files: Record<string, Uint8Array>;
+  try {
+    files = unzipSync(threemf, {
+      filter: (f) => {
+        names.push(f.name);
+        return f.name === "3D/3dmodel.model" || f.name === "Metadata/model_settings.config";
+      },
+    });
+  } catch {
+    return "thumb";
+  }
+  // External geometry parts ⇒ a real project 3mf.
+  if (names.some((n) => /^3D\/Objects\/.*\.model$/i.test(n))) return "mesh";
+  // Inline mesh in the root model.
+  const root = files["3D/3dmodel.model"];
+  if (root) {
+    try {
+      if (/<mesh[\s>]/.test(strFromU8(root))) return "mesh";
+    } catch {
+      /* unreadable root → fall through */
+    }
+  }
+  // Sliced: at least one printable plate gcode ⇒ gcode toolpath preview.
+  if (names.some((n) => /^Metadata\/plate_\d+\.gcode$/i.test(n))) return "gcode";
+  // Project 3mf whose geometry is external but whose plater_id plates we can
+  // still enumerate (preview-only, no gcode) ⇒ mesh preview.
+  const settings = files["Metadata/model_settings.config"];
+  if (settings && listModelSettingsPlates(files).length > 0) return "mesh";
+  return "thumb";
+}
+
 /** Enumerate plater_id plates from Metadata/model_settings.config (project 3mf).
  *  These are preview-only (no gcode ⇒ not printable). Sorted by plater_id. */
 function listModelSettingsPlates(files: Record<string, Uint8Array>): PreviewPlate[] {
