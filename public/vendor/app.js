@@ -144,6 +144,12 @@
     // is authoritative on submit: app.js reads it top-to-bottom into
     // selected_plates (order + duplicates significant → spells words like BOB).
     function seqListOf(box) { return box && box.querySelector('[data-seq-list]'); }
+    // The job id lives on the [data-plate-seq] container so client-built rows can
+    // construct the per-plate thumbnail URL (same endpoint as the palette chips).
+    function jobIdOf(box) {
+      var seq = box && box.querySelector('[data-plate-seq]');
+      return seq ? seq.getAttribute('data-job-id') : null;
+    }
     function renumberSeq(box) {
       var list = seqListOf(box);
       if (!list) return;
@@ -157,13 +163,19 @@
       var err = box.querySelector('[data-seq-error]');
       if (err && items.length > 0) err.hidden = true;
     }
-    function makeSeqRow(plate, label) {
+    function makeSeqRow(plate, label, jobId) {
       var li = document.createElement('li');
       li.className = 'plate-seq-item';
       li.setAttribute('data-seq-item', '');
       li.setAttribute('data-plate', plate);
+      // small per-plate thumbnail so a built sequence (e.g. B,O,B) is visually
+      // readable; removes itself if the plate has no PNG (data-onerror="remove").
+      var thumb = jobId
+        ? '<img class="seq-thumb" loading="lazy" src="/api/queue/' + encodeURIComponent(jobId) +
+          '/thumbnail?plate=' + encodeURIComponent(plate) + '" alt="" data-onerror="remove">'
+        : '';
       li.innerHTML =
-        '<span class="seq-idx"></span><span class="seq-label"></span>' +
+        '<span class="seq-idx"></span>' + thumb + '<span class="seq-label"></span>' +
         '<span class="seq-controls">' +
         '<button type="button" class="act move" data-seq-up aria-label="上へ">↑</button>' +
         '<button type="button" class="act move" data-seq-down aria-label="下へ">↓</button>' +
@@ -182,7 +194,7 @@
         var abox = addChip.closest('.modal-box');
         var alist = seqListOf(abox);
         if (alist) {
-          alist.appendChild(makeSeqRow(addChip.getAttribute('data-plate-add'), addChip.getAttribute('data-plate-label')));
+          alist.appendChild(makeSeqRow(addChip.getAttribute('data-plate-add'), addChip.getAttribute('data-plate-label'), jobIdOf(abox)));
           renumberSeq(abox);
         }
         return;
@@ -193,9 +205,10 @@
         var allBox = addAll.closest('.modal-box');
         var allList = seqListOf(allBox);
         if (allList) {
+          var allJobId = jobIdOf(allBox);
           var chips = allBox.querySelectorAll('[data-plate-add]');
           for (var ci = 0; ci < chips.length; ci++) {
-            allList.appendChild(makeSeqRow(chips[ci].getAttribute('data-plate-add'), chips[ci].getAttribute('data-plate-label')));
+            allList.appendChild(makeSeqRow(chips[ci].getAttribute('data-plate-add'), chips[ci].getAttribute('data-plate-label'), allJobId));
           }
           renumberSeq(allBox);
         }

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Hono } from "hono";
-import { extractThumbnail } from "../injection/threemf.ts";
+import { extractPlateThumbnail, extractThumbnail } from "../injection/threemf.ts";
 import { cacheFileName } from "../core/artifact.ts";
 import { artifactETag } from "./http-cache.ts";
 import type { Repo } from "../db/repo.ts";
@@ -25,9 +25,14 @@ export function createThumbnailApp(deps: { repo: Repo; cacheDir: string }): Hono
     const path = join(cacheDir, cacheFileName(id));
     if (!existsSync(path)) return c.json({ error: "no cached artifact for job" }, 404);
 
+    // `?plate=plate_N` selects ONE plate's render (sequence-builder chips); no
+    // plate query keeps the overall-thumbnail behaviour byte-for-byte.
+    const plate = c.req.query("plate");
+
     // Revalidate, don't long-cache: same id-keyed mutable artifact as the mesh
-    // routes — a reused job id must not serve a prior upload's thumbnail.
-    const etag = artifactETag(path, "thumb");
+    // routes — a reused job id must not serve a prior upload's thumbnail. Fold
+    // the plate into the validator so plate_1 vs plate_2 never share an ETag.
+    const etag = plate ? artifactETag(path, "thumb", `plate:${plate}`) : artifactETag(path, "thumb");
     c.header("cache-control", "no-cache");
     if (etag) {
       c.header("etag", etag);
@@ -36,7 +41,8 @@ export function createThumbnailApp(deps: { repo: Repo; cacheDir: string }): Hono
 
     let png: Uint8Array | null;
     try {
-      png = extractThumbnail(readFileSync(path));
+      const buf = readFileSync(path);
+      png = plate ? extractPlateThumbnail(buf, plate) : extractThumbnail(buf);
     } catch {
       return c.json({ error: "could not read artifact" }, 404);
     }

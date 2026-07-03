@@ -176,4 +176,17 @@ describe("listPlates (multi-plate 3mf upload — plate selection)", () => {
     const noGcode = Buffer.from(zipSync({ "3D/3dmodel.model": strToU8("<model/>") }));
     expect(listPlates(noGcode)).toEqual([]);
   });
+
+  test("plates come out in NUMERIC order (plate_2 before plate_10), not lexicographic", () => {
+    // Insert out of order so a bare .sort() (lexicographic) would return
+    // plate_1, plate_10, plate_2 — the bug this fixes.
+    const threemf = Buffer.from(
+      zipSync({
+        "Metadata/plate_10.gcode": strToU8(PLATE_GCODE),
+        "Metadata/plate_1.gcode": strToU8(PLATE_GCODE),
+        "Metadata/plate_2.gcode": strToU8(PLATE_GCODE),
+      }),
+    );
+    expect(listPlates(threemf).map((p) => p.plate)).toEqual(["plate_1", "plate_2", "plate_10"]);
+  });
 });

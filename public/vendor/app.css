@@ -79,13 +79,17 @@
   .plate-opt:has(input:checked){border-color:var(--blue);background:#eef4fd}
   .plate-eta{color:var(--muted);font-size:12px}
   /* ordered print-sequence builder (multi-plate 3mf confirm) */
-  .plate-palette{display:flex;flex-wrap:nowrap;gap:8px;overflow-x:auto;padding:2px 0 8px;scrollbar-width:thin;-webkit-overflow-scrolling:touch}
-  .plate-chip{flex:0 0 auto;display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:inherit;cursor:pointer;font:inherit;font-size:13px;white-space:nowrap}
+  .plate-palette{display:flex;flex-wrap:nowrap;gap:8px;overflow-x:auto;padding:2px 0 8px;scrollbar-width:thin;-webkit-overflow-scrolling:touch;align-items:stretch}
+  /* palette chip is a small CARD: per-plate thumbnail above label + eta, so the
+     user SEES the plate's content (e.g. the letter) before adding it */
+  .plate-chip{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:#fff;color:inherit;cursor:pointer;font:inherit;font-size:13px;white-space:nowrap}
   .plate-chip:hover{border-color:var(--blue);background:#eef4fd}
-  .plate-add-all{flex:0 0 auto;white-space:nowrap}
+  .plate-chip-thumb{width:56px;height:56px;object-fit:contain;background:#f4f4f6;border-radius:6px;display:block}
+  .plate-add-all{flex:0 0 auto;white-space:nowrap;align-self:center}
   .plate-seq-list{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:4px}
   .plate-seq-item{display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid var(--line);border-radius:8px;font-size:13px}
   .plate-seq-item .seq-idx{min-width:20px;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+  .plate-seq-item .seq-thumb{width:32px;height:32px;object-fit:contain;background:#f4f4f6;border-radius:4px;flex:0 0 auto}
   .plate-seq-item .seq-label{flex:1}
   .plate-seq-item .seq-controls{display:flex;gap:4px;margin-left:auto}
   .plate-seq-count{margin:6px 0 0;font-size:12px}
