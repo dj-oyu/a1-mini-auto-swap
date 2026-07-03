@@ -32,11 +32,20 @@ export interface InjectResult {
   warnings: string[];
 }
 
-/** Discover the plate gcode entries (Metadata/plate_N.gcode, excluding .md5). */
+/** Discover the plate gcode entries (Metadata/plate_N.gcode, excluding .md5),
+ *  sorted NUMERICALLY by plate integer (plate_2 before plate_10) — a bare
+ *  lexicographic .sort() would order plate_1, plate_10, plate_2, which drives a
+ *  wrong palette-chip / listPlates order for a multi-plate export. */
 export function findPlateGcodes(files: Record<string, Uint8Array>): string[] {
   return Object.keys(files)
     .filter((n) => /^Metadata\/plate_\d+\.gcode$/i.test(n))
-    .sort();
+    .sort((a, b) => plateNumOf(a) - plateNumOf(b));
+}
+
+/** Extract the plate integer from a "…/plate_N.…" path (0 when unmatched). */
+function plateNumOf(path: string): number {
+  const m = /plate_(\d+)\./i.exec(path);
+  return m ? Number(m[1]) : 0;
 }
 
 export interface PlateInfo {
@@ -163,6 +172,26 @@ export function extractThumbnail(threemf: Buffer): Uint8Array | null {
     names.find((n) => n.startsWith("Metadata/") && isPng(n)) ??
     names.find(isPng);
   return preferred ? (files[preferred] ?? null) : null;
+}
+
+/**
+ * Extract ONE plate's render PNG (per-plate thumbnail for the sequence builder):
+ * prefer `Metadata/<plate>.png` (a printable multi-plate export ships one per
+ * plate — plate_1.png … plate_26.png), fall back to `Metadata/top_<N>.png` when
+ * that variant is present, else null. Bounded (single dict lookups) and never
+ * throws — a malformed archive or unknown plate degrades to null so the chip's
+ * <img> just removes itself and the label alone remains.
+ */
+export function extractPlateThumbnail(threemf: Buffer, plate: string): Uint8Array | null {
+  const m = /^plate_(\d+)$/i.exec(plate);
+  if (!m) return null;
+  let files: Record<string, Uint8Array>;
+  try {
+    files = unzipSync(threemf);
+  } catch {
+    return null;
+  }
+  return files[`Metadata/${plate}.png`] ?? files[`Metadata/top_${m[1]}.png`] ?? null;
 }
 
 /**

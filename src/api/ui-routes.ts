@@ -472,10 +472,11 @@ function swatchDot(color: string): Html {
  *  Deliberately worded to not be confused with the filament list below, which
  *  is project-wide (spec: parseFilaments reads project_settings.config, not
  *  any one plate) nor with the read-only preview tabs above. */
-function renderPlateSelect(plates: PlateInfo[]): Html {
+function renderPlateSelect(jobId: number, plates: PlateInfo[]): Html {
   const chips = plates.map(
     (p) => html`
       <button type="button" class="plate-chip" data-plate-add="${p.plate}" data-plate-label="プレート ${plateNumLabel(p.plate)}">
+        <img class="plate-chip-thumb" loading="lazy" src="/api/queue/${jobId}/thumbnail?plate=${p.plate}" alt="プレート ${plateNumLabel(p.plate)}" data-onerror="remove" />
         <span class="plate-label">プレート ${plateNumLabel(p.plate)}</span>
         ${p.estimatedSeconds != null ? html`<span class="plate-eta">${fmtDuration(p.estimatedSeconds)}</span>` : ""}
       </button>
@@ -484,7 +485,7 @@ function renderPlateSelect(plates: PlateInfo[]): Html {
   // Start EMPTY: building a word (e.g. B,O,B) is a few clicks instead of removing
   // 25 rows. "全追加" adds every plate once for the "print everything" case.
   return html`
-    <div class="plate-select" data-plate-seq>
+    <div class="plate-select" data-plate-seq data-job-id="${jobId}">
       <p class="muted">印刷シーケンス（順番・繰り返し可）：複数プレートを含む3mfです。チップを押すとその順にプレートを追加できます（同じプレートを何度でも追加でき、単語を綴れます）。初期状態は空で、「全追加」を押すと全プレートを1回ずつ入れられます。上の<strong>プレビュー(タブ)</strong>は表示専用で、実際に<strong>印刷するのは下のシーケンス</strong>（この順・この枚数）です。</p>
       <div class="plate-palette" role="group" aria-label="プレートを追加">
         ${chips}
@@ -550,7 +551,7 @@ function renderConfirmPanel(
         <p class="muted">${job.filename}</p>
         ${previewPlates.length > 1 ? renderPlateTabs(previewPlates, previewPlates[0]!.plate) : ""}
         ${renderViewer(job.id, filaments[0]?.color, previewPlates.length > 0, false, previewPlates[0]?.plate)}
-        ${plates.length > 1 ? renderPlateSelect(plates) : ""}
+        ${plates.length > 1 ? renderPlateSelect(job.id, plates) : ""}
         <div class="fil-list">${rows}</div>
         <label class="proj-assign">プロジェクト
           <select data-project>${projectOpts}</select>

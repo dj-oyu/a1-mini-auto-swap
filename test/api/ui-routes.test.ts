@@ -463,8 +463,24 @@ describe("GET / (dashboard SSR)", () => {
       // static per-plate estimate, when the archive carries a plate_N.json
       expect(text).toContain("1時間"); // plate_1: 3600s
       expect(text).toContain("30分"); // plate_24: 1800s
-      // no thumbnail dependency: no per-plate thumbnail endpoint call
-      expect(text).not.toContain("thumbnail?plate=");
+      // each chip shows THAT plate's thumbnail so the user can see what to pick,
+      // built from the job id threaded into renderPlateSelect (fix 2)
+      expect(text).toContain(`src="/api/queue/${id}/thumbnail?plate=plate_1"`);
+      expect(text).toContain(`src="/api/queue/${id}/thumbnail?plate=plate_24"`);
+      expect(text).toContain('class="plate-chip-thumb"');
+      // the sequence container exposes the job id so app.js can build seq-row srcs
+      expect(text).toContain(`data-plate-seq data-job-id="${id}"`);
+    });
+
+    test("palette chips are in NUMERIC plate order (plate_2 before plate_10, not lexicographic)", async () => {
+      const id = repo.createJob({ filename: "multi.3mf" });
+      writeCachedThreemf(id, [1, 2, 10]);
+
+      const text = await (await app.request(`/ui/queue/${id}/confirm`)).text();
+      const order = (text.match(/data-plate-add="(plate_\d+)"/g) ?? []).map((m) =>
+        m.replace(/data-plate-add="|"/g, ""),
+      );
+      expect(order).toEqual(["plate_1", "plate_2", "plate_10"]);
     });
 
     test("the sequence starts EMPTY (build a word e.g. B,O,B, not remove 25 rows)", async () => {
