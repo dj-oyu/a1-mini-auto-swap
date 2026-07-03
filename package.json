@@ -17,7 +17,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "certs": "bun run scripts/gen-certs.ts",
-    "dry3mf": "bun run scripts/dry-rehearsal-3mf.ts"
+    "dry3mf": "bun run scripts/dry-rehearsal-3mf.ts",
+    "vendor:gcode": "bun build ./node_modules/gcode-preview --target=browser --format=esm --outfile=public/vendor/gcode-preview.js"
   },
   "dependencies": {
     "aedes": "^0.51.3",
@@ -33,6 +34,7 @@
     "@playwright/test": "^1.61.1",
     "@types/bun": "^1.3.14",
     "@types/node": "^22.10.2",
+    "gcode-preview": "^2.18.0",
     "htmx.org": "^2.0.10",
     "three": "^0.185.1",
     "typescript": "^5.7.2"

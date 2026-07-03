@@ -6,7 +6,14 @@ import { html, raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
 import { projectRemainingSec } from "../core/eta.ts";
 import { cacheFileName } from "../core/artifact.ts";
-import { listPlates, listPreviewPlates, type PlateInfo, type PreviewPlate } from "../injection/threemf.ts";
+import {
+  listPlates,
+  listPreviewPlates,
+  previewKind,
+  type PlateInfo,
+  type PreviewKind,
+  type PreviewPlate,
+} from "../injection/threemf.ts";
 import type { Repo } from "../db/repo.ts";
 
 // Re-exported for existing consumers/tests; the ETA aggregation rule itself
@@ -70,6 +77,20 @@ export function createUiApp(deps: { repo: Repo; cacheDir: string }): Hono {
     }
   };
 
+  // Which 3D preview renderer the archive needs (mesh / gcode / thumb — Part A
+  // 3-tier). Defaults to "mesh" when there's no cache (or a read error) so the
+  // viewer still emits data-model-url and falls back to /model → thumbnail,
+  // exactly as before this feature. Best-effort, never throws.
+  const readCachedPreviewKind = (jobId: number): PreviewKind => {
+    try {
+      const path = join(cacheDir, cacheFileName(jobId));
+      if (!existsSync(path)) return "mesh";
+      return previewKind(readFileSync(path));
+    } catch {
+      return "mesh";
+    }
+  };
+
   const snapshot = () => ({
     jobs: repo.listJobs(),
     stocker: repo.getStocker(),
@@ -116,7 +137,8 @@ export function createUiApp(deps: { repo: Repo; cacheDir: string }): Hono {
     const job = Number.isInteger(id) && id > 0 ? repo.getJob(id) : null;
     const plates = job ? readCachedPlates(job.id) : [];
     const previewPlates = job ? readCachedPreviewPlates(job.id) : [];
-    return c.html(renderConfirmPanel(job, repo.listProjects(), plates, previewPlates));
+    const kind = job ? readCachedPreviewKind(job.id) : "mesh";
+    return c.html(renderConfirmPanel(job, repo.listProjects(), plates, previewPlates, kind));
   });
 
   // GET /ui/stocker/config — the stocker capacity config modal (spec 11).
@@ -132,7 +154,8 @@ export function createUiApp(deps: { repo: Repo; cacheDir: string }): Hono {
     const id = Number(c.req.param("id"));
     const job = Number.isInteger(id) && id > 0 ? repo.getJob(id) : null;
     const plates = job ? readCachedPreviewPlates(job.id) : [];
-    return c.html(renderPreviewPanel(job, plates));
+    const kind = job ? readCachedPreviewKind(job.id) : "mesh";
+    return c.html(renderPreviewPanel(job, plates, kind));
   });
 
   // ── htmx action routes (MVP #2) ─────────────────────────────────────────────
@@ -347,7 +370,7 @@ function renderSnapshotPanel(): Html {
  *  of plate tabs above ONE large viewer; clicking a tab swaps the plate in the
  *  same WebGL context (viewer.js). Single/none → one large viewer that falls
  *  back to the whole-archive /model then the thumbnail. */
-function renderPreviewPanel(job: JobRow | null, plates: PreviewPlate[] = []): Html {
+function renderPreviewPanel(job: JobRow | null, plates: PreviewPlate[] = [], kind: PreviewKind = "mesh"): Html {
   if (!job) {
     return html`<div class="modal-overlay" data-close><div class="modal-box"${MODAL_BOX_A11Y}>ジョブが見つかりません。<div class="modal-actions"><button class="act" data-close>閉じる</button></div></div></div>`;
   }
@@ -355,10 +378,10 @@ function renderPreviewPanel(job: JobRow | null, plates: PreviewPlate[] = []): Ht
   const active = plates[0]?.plate;
   const body =
     plates.length === 0
-      ? renderViewer(job.id, filaments[0]?.color, false, true) // no plate info → whole-archive
+      ? renderViewer(job.id, filaments[0]?.color, kind, true) // no plate info → whole-archive
       : html`
           ${plates.length > 1 ? renderPlateTabs(plates, active!) : ""}
-          ${renderViewer(job.id, filaments[0]?.color, true, true, active)}
+          ${renderViewer(job.id, filaments[0]?.color, kind, true, active)}
         `;
   return html`
     <div class="modal-overlay" data-close>
@@ -413,23 +436,40 @@ function parseMapping(json: string | null): number[] {
   return out;
 }
 
-/** A 3D preview container (spec 17 §9). viewer.js loads the mesh into a Three.js
- *  canvas here; until then / on failure the fallback thumbnail <img> shows.
- *  When `plateMesh` is set (multi-plate upload, task #23) the viewer renders the
- *  ACTUAL selected plate's geometry via /api/plate-mesh and re-loads whenever the
- *  plate radio changes; it still falls back to the whole-archive /model and then
- *  the thumbnail. Single-plate uploads keep the plain /model behaviour. */
-function renderViewer(jobId: number, colorHex?: string, plateMesh = false, large = false, activePlate?: string): Html {
+/** A 3D preview container (spec 17 §9 / Part A). One viewer slot; the RENDERER is
+ *  chosen by `kind` (a data-preview-kind flag the client reads):
+ *   - "mesh":  Three.js mesh viewer (viewer.js). Emits data-model-url (whole
+ *     archive); with an activePlate it ALSO emits data-plate-mesh + data-plate so
+ *     the ACTUAL selected plate renders and reloads on tab/radio change (task
+ *     #23), falling back to /model then the thumbnail.
+ *   - "gcode": gcode-preview toolpath viewer (gviewer.js). Emits data-gcode-url
+ *     + data-plate; a sliced .gcode.3mf has no mesh, so NO data-model-url is
+ *     emitted (viewer.js ignores it) — gviewer draws the plate's toolpath and
+ *     falls back to the thumbnail on failure.
+ *   - "thumb": no source attr; only the fallback <img> shows.
+ *  Every kind keeps the fallback thumbnail <img> until its renderer succeeds. */
+function renderViewer(
+  jobId: number,
+  colorHex?: string,
+  kind: PreviewKind = "mesh",
+  large = false,
+  activePlate?: string,
+): Html {
   const color = colorHex && safeHex(colorHex) ? colorHex : "#4b9fea";
-  // data-plate-mesh enables the per-plate source; data-plate seeds the initial
-  // (or single-plate, tab-less) selection so viewer.js can load a plate without
-  // a tab/radio present. viewer.js prefers an active tab / checked radio.
-  const plateAttr = plateMesh
-    ? html` data-plate-mesh="/api/plate-mesh?job=${jobId}"${activePlate ? html` data-plate="${activePlate}"` : ""}`
-    : "";
+  let source: Html | string = "";
+  if (kind === "gcode") {
+    // data-plate seeds the initial (or single-plate, tab-less) selection; gviewer
+    // prefers an active tab / checked radio. No mesh in a sliced file → no /model.
+    source = html` data-gcode-url="/api/queue/${jobId}/gcode"${activePlate ? html` data-plate="${activePlate}"` : ""}`;
+  } else if (kind === "mesh") {
+    const plateAttr = activePlate
+      ? html` data-plate-mesh="/api/plate-mesh?job=${jobId}" data-plate="${activePlate}"`
+      : "";
+    source = html` data-model-url="/api/queue/${jobId}/model"${plateAttr}`;
+  }
   const cls = large ? "viewer viewer-large" : "viewer";
   return html`
-    <div class="${cls}" data-model-url="/api/queue/${jobId}/model" data-color="${color}"${plateAttr}>
+    <div class="${cls}" data-preview-kind="${kind}" data-color="${color}"${source}>
       <img class="viewer-fallback" src="/api/queue/${jobId}/thumbnail" alt="" data-onerror="remove" />
     </div>
   `;
@@ -510,6 +550,7 @@ function renderConfirmPanel(
   projects: ProjectRow[] = [],
   plates: PlateInfo[] = [],
   previewPlates: PreviewPlate[] = [],
+  kind: PreviewKind = "mesh",
 ): Html {
   if (!job) {
     return html`<div class="modal-overlay" data-close><div class="modal-box"${MODAL_BOX_A11Y}>ジョブが見つかりません。<div class="modal-actions"><button class="act" data-close>閉じる</button></div></div></div>`;
@@ -518,6 +559,34 @@ function renderConfirmPanel(
     return html`<div class="modal-overlay" data-close><div class="modal-box"${MODAL_BOX_A11Y}>このジョブは確認待ちではありません（${STATUS_META[job.status].label}）。<div class="modal-actions"><button class="act" data-close>閉じる</button></div></div></div>`;
   }
   const filaments = parseFilaments(job.filaments);
+
+  // Slice-state gate (Part B): "printable" = the cached archive has ≥1
+  // Metadata/plate_N.gcode (plates = the gcode plates). An UNSLICED PROJECT 3mf
+  // has preview plates (model_settings plater_id) but NO gcode → it can be
+  // previewed (the mesh tabs work) but NOT sent to the printer. Show the 3D
+  // preview + a clear notice, and HIDE the slot mapping, project select, and the
+  // 確定 (enqueue) button — there is no enqueue path for an unsliced file.
+  // Guarded on `previewPlates.length > 0` so a job with NO cached artifact (or a
+  // plain non-project file) keeps the full confirm flow it had before.
+  const printable = plates.length > 0;
+  if (!printable && previewPlates.length > 0) {
+    return html`
+      <div class="modal-overlay" data-close>
+        <div class="modal-box"${MODAL_BOX_A11Y}>
+          <h2 class="modal-title">3D プレビュー</h2>
+          <p class="muted">${job.filename}</p>
+          ${previewPlates.length > 1 ? renderPlateTabs(previewPlates, previewPlates[0]!.plate) : ""}
+          ${renderViewer(job.id, filaments[0]?.color, kind, false, previewPlates[0]?.plate)}
+          <p class="notice unsliced" data-unsliced>このファイルはスライスされていません（gcodeがありません）。プリンタに送信できません。Bambu Studio でスライスして .gcode.3mf をアップロードしてください。</p>
+          <div class="modal-actions">
+            <button class="act" data-close>閉じる</button>
+            <button class="act danger" data-delete="${job.id}">削除</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   const mapping = parseMapping(job.ams_mapping);
   const projectOpts = [
     html`<option value="" ${job.project_id == null ? "selected" : ""}>（プロジェクトなし）</option>`,
@@ -550,7 +619,7 @@ function renderConfirmPanel(
         <h2 class="modal-title">フィラメント確認</h2>
         <p class="muted">${job.filename}</p>
         ${previewPlates.length > 1 ? renderPlateTabs(previewPlates, previewPlates[0]!.plate) : ""}
-        ${renderViewer(job.id, filaments[0]?.color, previewPlates.length > 0, false, previewPlates[0]?.plate)}
+        ${renderViewer(job.id, filaments[0]?.color, kind, false, previewPlates[0]?.plate)}
         ${plates.length > 1 ? renderPlateSelect(job.id, plates) : ""}
         <div class="fil-list">${rows}</div>
         <label class="proj-assign">プロジェクト
@@ -804,6 +873,7 @@ function renderDashboard(data: DashboardData): Html {
   <script src="/vendor/htmx.min.js" defer></script>
   <script type="importmap">${raw('{"imports":{"three":"/vendor/three.module.min.js"}}')}</script>
   <script type="module" src="/vendor/viewer.js"></script>
+  <script type="module" src="/vendor/gviewer.js"></script>
   <link rel="stylesheet" href="/vendor/app.css" />
 </head>
 <body>

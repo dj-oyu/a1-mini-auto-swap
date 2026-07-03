@@ -528,6 +528,90 @@ describe("GET / (dashboard SSR)", () => {
     });
   });
 
+  describe("slice-state gating (Part B) + preview-kind (Part A)", () => {
+    /** Write an UNSLICED PROJECT 3mf to the cache: model_settings plater_id
+     *  plates + a (mesh-less) root model, but NO Metadata/plate_N.gcode → not
+     *  printable. */
+    function writeProjectThreemf(id: number, platerIds: number[]): void {
+      const plates = platerIds
+        .map((n) => `<plate><metadata key="plater_id" value="${n}"/></plate>`)
+        .join("");
+      const files: Record<string, Uint8Array> = {
+        "3D/3dmodel.model": strToU8("<model><resources/><build/></model>"),
+        "Metadata/model_settings.config": strToU8(`<?xml version="1.0"?><config>${plates}</config>`),
+        "Metadata/project_settings.config": strToU8("{}"),
+      };
+      writeFileSync(join(cacheDir, cacheFileName(id)), Buffer.from(zipSync(files)));
+    }
+
+    test("SLICED (.gcode.3mf): full flow — 確定 + slot selects + sequence builder, gcode preview", async () => {
+      const id = repo.createJob({ filename: "sliced.gcode.3mf", filaments: [{ slot: 1, color: "#112233" }] });
+      writeCachedThreemf(id, [1, 2]); // two plate gcodes → printable, no mesh
+
+      const text = await (await app.request(`/ui/queue/${id}/confirm`)).text();
+      // full enqueue flow present
+      expect(text).toContain(`data-confirm="${id}"`);
+      expect(text).toContain("この内容で確定");
+      expect(text).toContain('data-slot="1"'); // filament → AMS mapping select
+      expect(text).toContain("data-project"); // project select
+      expect(text).toContain("印刷シーケンス"); // sequence builder
+      expect(text).toContain("data-seq-list");
+      // preview-kind selection: sliced file (no mesh) → gcode toolpath viewer
+      expect(text).toContain('data-preview-kind="gcode"');
+      expect(text).toContain(`data-gcode-url="/api/queue/${id}/gcode"`);
+      // NOT the unsliced notice
+      expect(text).not.toContain("スライスされていません");
+    });
+
+    test("UNSLICED (project 3mf): shows preview + notice, HIDES mapping/project/確定", async () => {
+      const id = repo.createJob({ filename: "project.3mf", filaments: [{ slot: 1, color: "#112233" }] });
+      writeProjectThreemf(id, [1, 2]); // model_settings plates, NO gcode → not printable
+
+      const text = await (await app.request(`/ui/queue/${id}/confirm`)).text();
+      // the clear notice
+      expect(text).toContain("このファイルはスライスされていません（gcodeがありません）");
+      expect(text).toContain("data-unsliced");
+      // NO enqueue path
+      expect(text).not.toContain(`data-confirm="${id}"`);
+      expect(text).not.toContain("この内容で確定");
+      expect(text).not.toContain("data-slot=");
+      expect(text).not.toContain("data-project");
+      expect(text).not.toContain("印刷シーケンス");
+      // still shows the 3D preview: mesh tabs + mesh viewer source
+      expect(text).toContain('data-preview-kind="mesh"');
+      expect(text).toContain('class="plate-tabs"');
+      expect((text.match(/role="tab"/g) ?? []).length).toBe(2);
+      expect(text).toContain(`data-plate-mesh="/api/plate-mesh?job=${id}"`);
+      // and a way out
+      expect(text).toContain("閉じる");
+    });
+
+    test("the page loads the vendored gcode-preview viewer (no CDN)", async () => {
+      const r = await body();
+      expect(r.text).toContain('src="/vendor/gviewer.js"');
+      const gviewer = await asset("/vendor/gviewer.js");
+      expect(gviewer).toContain("initGViewers");
+      expect(gviewer).toContain("processGCode");
+      // imports the vendored bundle by absolute path (not the "three" import map)
+      expect(gviewer).toContain('"/vendor/gcode-preview.js"');
+      // the vendored bundle is served and self-contained (no bare/CDN imports)
+      const bundle = await asset("/vendor/gcode-preview.js");
+      expect(bundle.length).toBeGreaterThan(1000);
+      expect(bundle).not.toContain("unpkg");
+      expect(bundle).not.toContain('from"three"');
+    });
+
+    test("a no-cache job keeps the full confirm flow (not gated as unsliced)", async () => {
+      const id = repo.createJob({ filename: "nocache.3mf", filaments: [{ slot: 1, color: "#112233" }] });
+      const text = await (await app.request(`/ui/queue/${id}/confirm`)).text();
+      expect(text).toContain(`data-confirm="${id}"`);
+      expect(text).not.toContain("スライスされていません");
+      // defaults to the mesh viewer (data-model-url → /model → thumbnail)
+      expect(text).toContain('data-preview-kind="mesh"');
+      expect(text).toContain(`data-model-url="/api/queue/${id}/model"`);
+    });
+  });
+
   describe("printing header (MVP #4)", () => {
     test("renders no header when nothing is printing", async () => {
       repo.createJob({ filename: "waiting.3mf" }); // stays 'processing'
