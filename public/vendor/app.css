@@ -123,6 +123,13 @@
   .badge.blue{background:var(--blue)} .badge.green{background:var(--green)} .badge.red{background:var(--red)}
   .badge.amber{background:var(--amber)} .badge.slate{background:var(--slate)} .badge.grey{background:var(--grey)}
   .card-sub{display:flex;gap:14px;align-items:center;margin-top:8px;color:var(--muted);font-size:13px;flex-wrap:wrap}
+  /* Per-card FTPS 送信 progress (blue, matches .prog-bar / .upload-chip). Hidden by
+     default; [hidden] must win over the flex rule so it takes no layout when idle. */
+  .card-progress{display:flex;align-items:center;gap:8px;margin-top:8px}
+  .card-progress[hidden]{display:none}
+  .card-progress-track{flex:1;height:6px;background:#eef4ff;border-radius:999px;overflow:hidden}
+  .card-progress-bar{height:100%;width:0;background:var(--blue);border-radius:999px;transition:width .3s ease}
+  .card-progress-label{font-size:12px;color:var(--blue);font-variant-numeric:tabular-nums;white-space:nowrap}
   .swatches{display:inline-flex;gap:4px}
   .swatch{width:14px;height:14px;border-radius:50%;border:1px solid rgba(0,0,0,.15);display:inline-block}
   .subst{color:var(--amber);font-weight:600}
